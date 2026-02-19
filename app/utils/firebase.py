@@ -14,11 +14,20 @@ def init_firebase():
         
     path = settings.FIREBASE_SERVICE_ACCOUNT_PATH
     if path and os.path.exists(path):
-        cred = credentials.Certificate(path)
-        firebase_app = firebase_admin.initialize_app(cred)
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(path)
+            firebase_admin.initialize_app(cred)
+        firebase_app = firebase_admin.get_app()
         print("Firebase initialized with service account.")
     else:
-        print("WARNING: Firebase service account not found. Firebase features will be disabled.")
+        # Try Application Default Credentials (ADC) for Cloud Run/GCP
+        try:
+            if not firebase_admin._apps:
+                firebase_admin.initialize_app()
+            firebase_app = firebase_admin.get_app()
+            print("Firebase initialized with Application Default Credentials (ADC).")
+        except Exception as e:
+            print(f"WARNING: Firebase init failed (ADC & Path): {e}")
 
 def verify_firebase_token(id_token: str) -> Optional[Dict]:
     """
