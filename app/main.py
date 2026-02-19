@@ -12,12 +12,23 @@ from app.routers.teacher import auth as teacher_auth
 
 
 # Create all database tables
-Base.metadata.create_all(bind=engine)
+# We move this to a lifespan event so the app doesn't crash on import if DB is missing
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("INFO: Database tables created successfully.")
+    except Exception as e:
+        print(f"WARNING: Database connection failed during startup. The app will run, but database features will fail. Error: {e}")
+    yield
 
 app = FastAPI(
     title="EdTech LMS API",
     description="Learning Management System — Admin, Student & Teacher APIs",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # CORS — Allow Flutter apps to connect

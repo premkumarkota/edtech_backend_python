@@ -6,11 +6,10 @@ class Settings(BaseSettings):
     """Load settings from .env file"""
     
     # Database
-    DATABASE_URL: str
+    DATABASE_URL: str = "sqlite:///./test.db"  # Default to avoid crash
     
     # JWT
-    SECRET_KEY: str
-    ALGORITHM: str = "HS256"
+    SECRET_KEY: str = "default_unsafe_secret"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
     # Firebase
