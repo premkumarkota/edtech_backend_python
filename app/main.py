@@ -68,6 +68,14 @@ app.include_router(
     tags=["Admin - Teacher Actions"],
 )
 
+# Temporary DB Fix
+from app.routers.admin import db_fix
+app.include_router(
+    db_fix.router,
+    prefix="/api/admin/db-fix",
+    tags=["Admin - Setup"],
+)
+
 # Common APIs
 from app.routers.common import categories as common_categories
 app.include_router(
