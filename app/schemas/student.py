@@ -18,6 +18,11 @@ class StudentOnboardingRequest(BaseModel):
     name: str
     email: Optional[str] = None
     profile_image_url: Optional[str] = None
+    dob: str
+    age: int
+    school_college: str
+    location: str
+    category_id: int
 
 
 # ========== RESPONSE SCHEMAS ==========
@@ -32,6 +37,14 @@ class StudentProfileResponse(BaseModel):
     is_active: bool
     onboarding_completed: bool
     profile_image_url: Optional[str] = None
+    
+    # Specific fields
+    category_id: Optional[int] = None
+    dob: Optional[str] = None
+    age: Optional[int] = None
+    school_college: Optional[str] = None
+    location: Optional[str] = None
+    
     created_at: Optional[datetime] = None
 
     class Config:

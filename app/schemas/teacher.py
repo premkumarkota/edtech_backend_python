@@ -18,6 +18,8 @@ class TeacherOnboardingRequest(BaseModel):
     name: str
     email: Optional[str] = None
     profile_image_url: Optional[str] = None
+    document_url: str
+    category_id: int
 
 
 # ========== RESPONSE SCHEMAS ==========
@@ -32,6 +34,11 @@ class TeacherProfileResponse(BaseModel):
     is_active: bool
     onboarding_completed: bool
     profile_image_url: Optional[str] = None
+    
+    document_url: Optional[str] = None
+    is_verified: bool  # Admin approval status
+    category_id: Optional[int] = None
+    
     created_at: Optional[datetime] = None
 
     class Config:

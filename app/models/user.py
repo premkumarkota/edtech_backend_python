@@ -37,6 +37,20 @@ class User(Base):
     # Profile fields (filled during onboarding)
     profile_image_url = Column(String(500), nullable=True)
 
+    # Student Specific Fields
+    dob = Column(String(50), nullable=True)
+    age = Column(Integer, nullable=True)
+    school_college = Column(String(200), nullable=True)
+    location = Column(String(200), nullable=True)
+
+    # Teacher Specific Fields
+    document_url = Column(String(500), nullable=True)
+    is_verified = Column(Boolean, default=False)  # For teacher verification (Admin approval)
+    
+    # Shared Fields (Both can have category)
+    from sqlalchemy import ForeignKey
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

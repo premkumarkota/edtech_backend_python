@@ -54,6 +54,28 @@ app.include_router(
     tags=["Admin - User Management"],
 )
 
+from app.routers.admin import categories as admin_categories
+app.include_router(
+    admin_categories.router,
+    prefix="/api/admin/categories",
+    tags=["Admin - Categories"],
+)
+
+from app.routers.admin import teachers as admin_teachers
+app.include_router(
+    admin_teachers.router,
+    prefix="/api/admin/teachers",
+    tags=["Admin - Teacher Actions"],
+)
+
+# Common APIs
+from app.routers.common import categories as common_categories
+app.include_router(
+    common_categories.router,
+    prefix="/api/common/categories",
+    tags=["Common - Categories"],
+)
+
 # Student App APIs
 app.include_router(
     student_auth.router,
@@ -61,11 +83,34 @@ app.include_router(
     tags=["Student - Authentication"],
 )
 
+from app.routers.student import home as student_home
+app.include_router(
+    student_home.router,
+    prefix="/api/student/home",
+    tags=["Student - Home (Teachers)"],
+)
+
 # Teacher App APIs
 app.include_router(
     teacher_auth.router,
     prefix="/api/teacher/auth",
     tags=["Teacher - Authentication"],
+)
+
+# Profile APIs (Token Required)
+from app.routers.student import profile as student_profile
+from app.routers.teacher import profile as teacher_profile
+
+app.include_router(
+    student_profile.router,
+    prefix="/api/student/profile",
+    tags=["Student - Profile"],
+)
+
+app.include_router(
+    teacher_profile.router,
+    prefix="/api/teacher/profile",
+    tags=["Teacher - Profile"],
 )
 
 

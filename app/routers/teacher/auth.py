@@ -130,6 +130,18 @@ def complete_teacher_onboarding(
     if request.profile_image_url:
         current_user.profile_image_url = request.profile_image_url
 
+    # Validate Category
+    from app.models.category import Category
+    category = db.query(Category).filter(Category.id == request.category_id).first()
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Category ID"
+        )
+    current_user.category_id = request.category_id
+
+    current_user.document_url = request.document_url
+
     db.commit()
     db.refresh(current_user)
     return current_user
