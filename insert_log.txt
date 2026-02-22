@@ -1,0 +1,25 @@
+﻿Column constraints in 'users':
+  id                             nullable=NO   default=nextval('users_id_seq'::regclass)
+  name                           nullable=NO   default=None
+  email                          nullable=NO   default=None
+  hashed_password                nullable=YES  default=None
+  role                           nullable=YES  default=None
+  is_active                      nullable=YES  default=None
+  created_at                     nullable=YES  default=now()
+  updated_at                     nullable=YES  default=None
+  firebase_uid                   nullable=YES  default=None
+  phone_number                   nullable=YES  default=None
+  onboarding_completed           nullable=YES  default=false
+  board_id                       nullable=YES  default=None
+  grade_id                       nullable=YES  default=None
+  profile_image_url              nullable=YES  default=None
+  dob                            nullable=YES  default=None
+  age                            nullable=YES  default=None
+  school_college                 nullable=YES  default=None
+  location                       nullable=YES  default=None
+  document_url                   nullable=YES  default=None
+  is_verified                    nullable=YES  default=false
+  category_id                    nullable=YES  default=None
+
+Testing student insert...
+  SUCCESS! id=17

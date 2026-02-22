@@ -1,128 +1,171 @@
-from fastapi import FastAPI
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
+from app.config import settings
 from app.database import engine, Base
-from app.models.user import User  # Import to register model with SQLAlchemy
 
+# ── Import ALL models in FK-dependency order so Base.metadata has them all ──
+from app.models import (  # noqa: F401
+    Category, User, UserRole,
+    StudentProfile, TeacherProfile, TeacherStatus,
+    Syllabus,
+    Quiz, QuizQuestion, QuizAttempt, QuizAnswer,
+)
+
+# ── Routers ──────────────────────────────────────────────────────────────────
 from app.routers.admin import auth as admin_auth
 from app.routers.admin import users as admin_users
+from app.routers.admin import categories as admin_categories
+from app.routers.admin import teachers as admin_teachers
+from app.routers.admin import syllabus as admin_syllabus
+from app.routers.admin import quiz as admin_quiz
+
+from app.routers.common import categories as common_categories
+
 from app.routers.student import auth as student_auth
+from app.routers.student import home as student_home
+from app.routers.student import syllabus as student_syllabus
+from app.routers.student import quiz as student_quiz
+from app.dependencies.auth import security
+
+try:
+    from app.routers.student import profile as student_profile
+    from app.routers.teacher import profile as teacher_profile
+    _has_profiles = True
+except ImportError:
+    _has_profiles = False
+
 from app.routers.teacher import auth as teacher_auth
 
 
-# Create all database tables
-# We move this to a lifespan event so the app doesn't crash on import if DB is missing
-from contextlib import asynccontextmanager
-
+# ── Lifespan (startup / shutdown) ────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         Base.metadata.create_all(bind=engine)
-        print("INFO: Database tables created successfully.")
+        print("INFO: Database tables created/verified successfully.")
     except Exception as e:
-        print(f"WARNING: Database connection failed during startup. The app will run, but database features will fail. Error: {e}")
+        print(f"WARNING: DB error on startup: {e}")
     yield
 
+
+# ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="EdTech LMS API",
     description="Learning Management System — Admin, Student & Teacher APIs",
     version="2.0.0",
     lifespan=lifespan,
+    swagger_ui_parameters={"persistAuthorization": True}
 )
 
-# CORS — Allow Flutter apps to connect
+# ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:51552",  # Added explicit port from screenshot
+        "http://127.0.0.1:51552",
+        "http://localhost:5000",
+        "http://localhost:3000",
+        "https://edtech-backend-1088198692751.asia-south1.run.app",
+    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ==================== MOUNT ROUTERS ====================
+# ── Serve local uploads (dev only) ────────────────────────────────────────────
+UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
+if not os.path.exists(UPLOADS_DIR):
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+app.mount("/files", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
-# Admin Portal APIs
-app.include_router(
-    admin_auth.router,
-    prefix="/api/admin/auth",
-    tags=["Admin - Authentication"],
-)
-app.include_router(
-    admin_users.router,
-    prefix="/api/admin/users",
-    tags=["Admin - User Management"],
-)
+# ═══════════════════════════════════════════════════════════════
+# ADMIN PORTAL APIs
+# ═══════════════════════════════════════════════════════════════
 
-from app.routers.admin import categories as admin_categories
-app.include_router(
-    admin_categories.router,
-    prefix="/api/admin/categories",
-    tags=["Admin - Categories"],
-)
+app.include_router(admin_auth.router,
+                   prefix="/api/admin/auth",
+                   tags=["Admin - Authentication"])
 
-from app.routers.admin import teachers as admin_teachers
-app.include_router(
-    admin_teachers.router,
-    prefix="/api/admin/teachers",
-    tags=["Admin - Teacher Actions"],
-)
+app.include_router(admin_users.router,
+                   prefix="/api/admin/users",
+                   tags=["Admin - User Management"])
 
-# Temporary DB Fix
-from app.routers.admin import db_fix
-app.include_router(
-    db_fix.router,
-    prefix="/api/admin/db-fix",
-    tags=["Admin - Setup"],
-)
+app.include_router(admin_categories.router,
+                   prefix="/api/admin/categories",
+                   tags=["Admin - Categories"])
 
-# Common APIs
-from app.routers.common import categories as common_categories
-app.include_router(
-    common_categories.router,
-    prefix="/api/common/categories",
-    tags=["Common - Categories"],
-)
+app.include_router(admin_teachers.router,
+                   prefix="/api/admin/teachers",
+                   tags=["Admin - Teacher Verification"])
 
-# Student App APIs
-app.include_router(
-    student_auth.router,
-    prefix="/api/student/auth",
-    tags=["Student - Authentication"],
-)
+app.include_router(admin_syllabus.router,
+                   prefix="/api/admin/syllabus",
+                   tags=["Admin - Syllabus"])
 
-from app.routers.student import home as student_home
-app.include_router(
-    student_home.router,
-    prefix="/api/student/home",
-    tags=["Student - Home (Teachers)"],
-)
-
-# Teacher App APIs
-app.include_router(
-    teacher_auth.router,
-    prefix="/api/teacher/auth",
-    tags=["Teacher - Authentication"],
-)
-
-# Profile APIs (Token Required)
-from app.routers.student import profile as student_profile
-from app.routers.teacher import profile as teacher_profile
-
-app.include_router(
-    student_profile.router,
-    prefix="/api/student/profile",
-    tags=["Student - Profile"],
-)
-
-app.include_router(
-    teacher_profile.router,
-    prefix="/api/teacher/profile",
-    tags=["Teacher - Profile"],
-)
+app.include_router(admin_quiz.router,
+                   prefix="/api/admin/quiz",
+                   tags=["Admin - Quiz Management"])
 
 
-# ==================== HEALTH CHECK ====================
+# ═══════════════════════════════════════════════════════════════
+# COMMON APIs
+# ═══════════════════════════════════════════════════════════════
+
+app.include_router(common_categories.router,
+                   prefix="/api/common/categories",
+                   tags=["Common - Categories"])
+
+# ═══════════════════════════════════════════════════════════════
+# STUDENT APP APIs
+# ═══════════════════════════════════════════════════════════════
+
+app.include_router(student_auth.router,
+                   prefix="/api/student/auth",
+                   tags=["Student - Authentication"])
+
+app.include_router(student_home.router,
+                   prefix="/api/student/home",
+                   tags=["Student - Home Feed"])
+
+app.include_router(student_syllabus.router,
+                   prefix="/api/student/syllabus",
+                   tags=["Student - Syllabus"])
+
+app.include_router(student_quiz.router,
+                   prefix="/api/student/quiz",
+                   tags=["Student - Quiz"])
+
+if _has_profiles:
+    app.include_router(student_profile.router,
+                       prefix="/api/student/profile",
+                       tags=["Student - Profile"])
+
+# ═══════════════════════════════════════════════════════════════
+# TEACHER APP APIs
+# ═══════════════════════════════════════════════════════════════
+
+app.include_router(teacher_auth.router,
+                   prefix="/api/teacher/auth",
+                   tags=["Teacher - Authentication"])
+
+if _has_profiles:
+    app.include_router(teacher_profile.router,
+                       prefix="/api/teacher/profile",
+                       tags=["Teacher - Profile"])
+
+
+# ═══════════════════════════════════════════════════════════════
+# HEALTH CHECK
+# ═══════════════════════════════════════════════════════════════
 
 @app.get("/", tags=["Health"])
 def home():
