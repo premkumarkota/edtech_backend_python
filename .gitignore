@@ -1,5 +1,11 @@
-# Environment
+# Environment — never commit real secrets
 .env
+.env.local
+.env.dev
+.env.prod
+firebase-key.json
+firebase-*.json
+# .env.example is SAFE to commit (no real passwords)
 venv/
 myenv/
 __pycache__/
