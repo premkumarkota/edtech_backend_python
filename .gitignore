@@ -25,3 +25,5 @@ logs/
 
 # Markdown files
 *.md
+gcp-key-storage.json
+firebase-key.json

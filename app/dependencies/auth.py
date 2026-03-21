@@ -87,3 +87,26 @@ def get_current_teacher(
             detail="Teacher access required"
         )
     return user
+
+def get_onboarded_student(
+    user: User = Depends(get_current_student)
+) -> User:
+    """Check if student has completed onboarding"""
+    if not user.onboarding_completed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Student onboarding not completed"
+        )
+    return user
+
+
+def get_onboarded_teacher(
+    user: User = Depends(get_current_teacher)
+) -> User:
+    """Check if teacher has completed onboarding"""
+    if not user.onboarding_completed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Teacher onboarding not completed"
+        )
+    return user

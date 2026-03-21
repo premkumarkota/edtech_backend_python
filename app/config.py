@@ -16,14 +16,18 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
-    # Firebase
+    # Firebase & Storage
     FIREBASE_SERVICE_ACCOUNT_PATH: Optional[str] = None
+    GCP_BUCKET_NAME: Optional[str] = None
+    GCP_PROJECT_ID: Optional[str] = "edtech-107e3"
 
     # App
     DEBUG: bool = True
 
     class Config:
+        case_sensitive = False
         env_file = ".env"
+        extra = "allow"
 
 
 settings = Settings()

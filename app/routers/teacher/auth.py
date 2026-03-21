@@ -11,6 +11,9 @@ from app.schemas.teacher import (
 )
 from app.utils.firebase import verify_firebase_token
 from app.utils.security import create_access_token
+from app.services.storage_service import upload_file, ALLOWED_DOCUMENT_TYPES, generate_signed_url
+from fastapi import File, UploadFile, Request
+import uuid
 
 
 router = APIRouter()
@@ -114,6 +117,8 @@ def complete_teacher_onboarding(
     """
     current_user.name = request.name
     current_user.onboarding_completed = True
+    if request.profile_image_url:
+        current_user.profile_image_url = request.profile_image_url
 
     if request.email:
         # Check email not already taken
@@ -127,11 +132,10 @@ def complete_teacher_onboarding(
             )
         current_user.email = request.email
 
-    if request.profile_image_url:
-        current_user.profile_image_url = request.profile_image_url
-
     # Validate Category
     from app.models.category import Category
+    from app.models.teacher_profile import TeacherProfile, TeacherStatus
+    
     category = db.query(Category).filter(Category.id == request.category_id).first()
     if not category:
         raise HTTPException(
@@ -140,16 +144,58 @@ def complete_teacher_onboarding(
         )
     current_user.category_id = request.category_id
 
-    current_user.document_url = request.document_url
-
+    # --- ARCHITECT FIX: Create/Update Teacher Profile ---
+    profile = db.query(TeacherProfile).filter(TeacherProfile.user_id == current_user.id).first()
+    if not profile:
+        profile = TeacherProfile(user_id=current_user.id)
+        db.add(profile)
+    
+    profile.document_url = request.document_url
+    profile.status = TeacherStatus.PENDING  # Reset to pending on onboarding/update
+    
     db.commit()
     db.refresh(current_user)
-    return current_user
+    
+    # Return merged data for the schema
+    return {
+        **current_user.__dict__,
+        "status": profile.status,
+        "document_url": profile.document_url,
+    }
+
+
+@router.post("/upload-document")
+async def upload_teacher_document(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_teacher),
+):
+    """
+    Step 1.5 of Onboarding: Teacher picks a file and uploads it.
+    The backend uploads it to your GCP bucket and returns the final URL.
+    """
+    # This will use the GCP bucket because DEBUG=False in your .env
+    file_url = await upload_file(
+        file, 
+        folder=f"teachers/docs/{current_user.id}",
+        allowed_types=ALLOWED_DOCUMENT_TYPES
+    )
+    return {"document_url": file_url}
 
 
 @router.get("/profile", response_model=TeacherProfileResponse)
 def get_teacher_profile(
     current_user: User = Depends(get_current_teacher),
 ):
-    """Get current teacher's profile"""
-    return current_user
+    """
+    Get current teacher's profile.
+    Pulls data from both User data and TeacherProfile tables.
+    """
+    # Merge basic user data with extra teacher profile info
+    profile = current_user.teacher_profile
+    return {
+        **current_user.__dict__,
+        "status": profile.status if profile else "pending",
+        "document_url": profile.document_url if profile else None,
+        "rejection_reason": profile.rejection_reason if profile else None,
+        "category_id": profile.category_id if profile else None,
+    }

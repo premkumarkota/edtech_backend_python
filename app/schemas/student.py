@@ -57,3 +57,29 @@ class StudentSyncResponse(BaseModel):
     token_type: str = "bearer"
     user: StudentProfileResponse
     is_new_user: bool
+
+
+# ========== HOME FEED & DISCOVERY ==========
+
+class TeacherCardResponse(BaseModel):
+    """Simplified teacher info for the student home feed/list"""
+    id: int
+    name: Optional[str] = None
+    profile_image_url: Optional[str] = None
+    category_id: Optional[int] = None
+    
+    # Extra fields from teacher_profile
+    bio: Optional[str] = None
+    experience_years: Optional[int] = None
+    institution_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class HomeFeedResponse(BaseModel):
+    """Industry-standard home feed response with metadata"""
+    status: str = "success"
+    student_category_id: Optional[int] = None
+    teachers: list[TeacherCardResponse]
+    total_count: int

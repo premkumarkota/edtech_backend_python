@@ -36,7 +36,9 @@ class TeacherProfileResponse(BaseModel):
     profile_image_url: Optional[str] = None
     
     document_url: Optional[str] = None
-    is_verified: bool  # Admin approval status
+    is_verified: bool  # Legacy field (keep for now)
+    status: str = "pending" # Current status: pending, approved, rejected
+    rejection_reason: Optional[str] = None
     category_id: Optional[int] = None
     
     created_at: Optional[datetime] = None

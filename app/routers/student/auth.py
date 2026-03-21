@@ -115,6 +115,9 @@ def complete_student_onboarding(
     current_user.name = request.name
     current_user.onboarding_completed = True
 
+    if request.profile_image_url:
+        current_user.profile_image_url = request.profile_image_url
+
     if request.email:
         # Check email not already taken
         existing = db.query(User).filter(
@@ -127,11 +130,10 @@ def complete_student_onboarding(
             )
         current_user.email = request.email
 
-    if request.profile_image_url:
-        current_user.profile_image_url = request.profile_image_url
-
     # Validate Category
     from app.models.category import Category
+    from app.models.student_profile import StudentProfile
+    
     category = db.query(Category).filter(Category.id == request.category_id).first()
     if not category:
         raise HTTPException(
@@ -140,19 +142,43 @@ def complete_student_onboarding(
         )
     current_user.category_id = request.category_id
 
-    current_user.dob = request.dob
-    current_user.age = request.age
-    current_user.school_college = request.school_college
-    current_user.location = request.location
+    # --- ARCHITECT FIX: Create/Update Student Profile ---
+    profile = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if not profile:
+        profile = StudentProfile(user_id=current_user.id)
+        db.add(profile)
+    
+    profile.dob = request.dob
+    profile.age = request.age
+    profile.school_college = request.school_college
+    profile.location = request.location
 
     db.commit()
     db.refresh(current_user)
-    return current_user
+    
+    # Return merged data for the schema
+    return {
+        **current_user.__dict__,
+        "dob": profile.dob,
+        "age": profile.age,
+        "school_college": profile.school_college,
+        "location": profile.location,
+    }
 
 
 @router.get("/profile", response_model=StudentProfileResponse)
 def get_student_profile(
     current_user: User = Depends(get_current_student),
 ):
-    """Get current student's profile"""
-    return current_user
+    """
+    Get current student's profile.
+    Merges core User data with academic StudentProfile data.
+    """
+    profile = current_user.student_profile
+    return {
+        **current_user.__dict__,
+        "dob": profile.dob if profile else None,
+        "age": profile.age if profile else None,
+        "school_college": profile.school_college if profile else None,
+        "location": profile.location if profile else None,
+    }

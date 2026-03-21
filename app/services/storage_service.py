@@ -9,6 +9,7 @@ Usage:
 
 import os
 import uuid
+import datetime
 from fastapi import UploadFile, HTTPException
 from app.config import settings
 
@@ -107,9 +108,46 @@ async def _upload_gcp(contents: bytes, path: str, content_type: str) -> str:
     except ImportError:
         raise RuntimeError("google-cloud-storage is required: pip install google-cloud-storage")
 
-    client = gcs.Client()
+    client = gcs.Client.from_service_account_json(settings.FIREBASE_SERVICE_ACCOUNT_PATH)
     bucket = client.bucket(settings.GCP_BUCKET_NAME)
     blob = bucket.blob(path)
+    
     blob.upload_from_string(contents, content_type=content_type)
-    blob.make_public()
+    # blob.make_public()  # Removed: Not allowed when Uniform Bucket-Level Access is enabled
     return blob.public_url
+
+
+def generate_signed_url(blob_name: str, content_type: str) -> dict:
+    """
+    Generates a v4 signed URL for uploading a file directly to GCS.
+    """
+    try:
+        from google.cloud import storage as gcs
+    except ImportError:
+        raise RuntimeError("google-cloud-storage is required: pip install google-cloud-storage")
+
+    if settings.DEBUG and not getattr(settings, "GCP_BUCKET_NAME", None):
+        # Fallback for local testing: we'll simulate a signed URL
+        # pointing back to our own server, but for pure S3/GCP flow, 
+        # this is where the magic happens.
+        return {
+            "upload_url": f"http://localhost:8000/api/teacher/auth/mock-upload?path={blob_name}",
+            "final_url": f"/files/{blob_name}",
+            "fields": {}
+        }
+
+    client = gcs.Client()
+    bucket = client.bucket(settings.GCP_BUCKET_NAME)
+    blob = bucket.blob(blob_name)
+
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=15),
+        method="PUT",
+        content_type=content_type,
+    )
+
+    return {
+        "upload_url": url,
+        "final_url": blob.public_url,
+    }
