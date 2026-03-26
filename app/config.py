@@ -21,8 +21,14 @@ class Settings(BaseSettings):
     GCP_BUCKET_NAME: Optional[str] = None
     GCP_PROJECT_ID: Optional[str] = "edtech-107e3"
 
+    # Razorpay
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+    RAZORPAY_WEBHOOK_SECRET: str = ""
+
     # App
     DEBUG: bool = True
+
 
     class Config:
         case_sensitive = False

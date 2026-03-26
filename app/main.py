@@ -24,6 +24,8 @@ from app.routers.admin import categories as admin_categories
 from app.routers.admin import teachers as admin_teachers
 from app.routers.admin import syllabus as admin_syllabus
 from app.routers.admin import quiz as admin_quiz
+from app.routers.admin import plans as admin_plans
+from app.routers.admin import payouts as admin_payouts
 
 from app.routers.common import categories as common_categories
 
@@ -31,6 +33,8 @@ from app.routers.student import auth as student_auth
 from app.routers.student import home as student_home
 from app.routers.student import syllabus as student_syllabus
 from app.routers.student import quiz as student_quiz
+from app.routers.student import subscription as student_subscription
+from app.routers.student import sessions as student_sessions
 from app.dependencies.auth import security
 
 try:
@@ -41,6 +45,8 @@ except ImportError:
     _has_profiles = False
 
 from app.routers.teacher import auth as teacher_auth
+from app.routers.teacher import sessions as teacher_sessions
+from app.routers.payments import router as payments_webhook
 
 
 # ── Lifespan (startup / shutdown) ────────────────────────────────────────────
@@ -69,11 +75,13 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "http://localhost:51552",  # Added explicit port from screenshot
+        "http://localhost:51552",
         "http://127.0.0.1:51552",
         "http://localhost:5000",
         "http://localhost:3000",
         "https://edtech-backend-1088198692751.asia-south1.run.app",
+        "https://admin.mymentorservices.com",
+        "http://admin.mymentorservices.com",
     ],
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
@@ -115,6 +123,14 @@ app.include_router(admin_quiz.router,
                    prefix="/api/admin/quiz",
                    tags=["Admin - Quiz Management"])
 
+app.include_router(admin_plans.router,
+                   prefix="/api/admin/plans",
+                   tags=["Admin - Subscription Plans"])
+
+app.include_router(admin_payouts.router,
+                   prefix="/api/admin",
+                   tags=["Admin - Payouts & Rates"])
+
 
 # ═══════════════════════════════════════════════════════════════
 # COMMON APIs
@@ -144,6 +160,14 @@ app.include_router(student_quiz.router,
                    prefix="/api/student/quiz",
                    tags=["Student - Quiz"])
 
+app.include_router(student_subscription.router,
+                   prefix="/api/student/subscription",
+                   tags=["Student - Subscription & Payment"])
+
+app.include_router(student_sessions.router,
+                   prefix="/api/student/sessions",
+                   tags=["Student - Video Call Sessions"])
+
 if _has_profiles:
     app.include_router(student_profile.router,
                        prefix="/api/student/profile",
@@ -157,10 +181,22 @@ app.include_router(teacher_auth.router,
                    prefix="/api/teacher/auth",
                    tags=["Teacher - Authentication"])
 
+app.include_router(teacher_sessions.router,
+                   prefix="/api/teacher",
+                   tags=["Teacher - Sessions & Earnings"])
+
 if _has_profiles:
     app.include_router(teacher_profile.router,
                        prefix="/api/teacher/profile",
                        tags=["Teacher - Profile"])
+
+# ═══════════════════════════════════════════════════════════════
+# PAYMENT WEBHOOK (no JWT — HMAC signature verified)
+# ═══════════════════════════════════════════════════════════════
+
+app.include_router(payments_webhook,
+                   prefix="/api/payments/webhook",
+                   tags=["Payments - Webhook"])
 
 
 # ═══════════════════════════════════════════════════════════════
