@@ -102,7 +102,7 @@ app.mount("/files", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 app.include_router(admin_auth.router,
                    prefix="/api/admin/auth",
-                   tags=["Admin - Authentication"])
+                   tags=["Admin - Authentication Main"])
 
 app.include_router(admin_users.router,
                    prefix="/api/admin/users",
