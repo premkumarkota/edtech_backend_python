@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_teacher
@@ -12,11 +12,45 @@ from app.schemas.teacher import (
 from app.utils.firebase import verify_firebase_token
 from app.utils.security import create_access_token
 from app.services.storage_service import upload_file, ALLOWED_DOCUMENT_TYPES, generate_signed_url
-from fastapi import File, UploadFile, Request
 import uuid
 
 
 router = APIRouter()
+
+
+def _build_teacher_response(user: User, db: Session) -> dict:
+    """
+    Build the full TeacherProfileResponse dict from User + related tables.
+    Used by all teacher auth endpoints for a consistent response.
+    """
+    from app.models.category import Category
+    from app.models.payout import TeacherRate
+
+    profile  = user.teacher_profile
+    category = db.query(Category).filter(Category.id == user.category_id).first() if user.category_id else None
+    rate_row = db.query(TeacherRate).filter(TeacherRate.teacher_id == user.id).first()
+
+    return {
+        **user.__dict__,
+        "status":           profile.status if profile else "pending",
+        "document_url":     profile.document_url if profile else user.document_url,
+        "rejection_reason": profile.rejection_reason if profile else None,
+        "reviewed_at":      profile.reviewed_at if profile else None,
+        "category_name":    category.name if category else None,
+        "rate_per_minute":  float(rate_row.rate_per_minute) if rate_row else 2.00,
+        "proposed_rate_per_minute": float(profile.proposed_rate_per_minute) if (profile and profile.proposed_rate_per_minute) else None,
+        # Rich profile fields
+        "bio":              profile.bio if profile else None,
+        "experience_years": profile.experience_years if profile else None,
+        "institution_name": profile.institution_name if profile else None,
+        "location":         profile.location if profile else None,
+        "education":        profile.education if profile else [],
+        "experience":       profile.experience if profile else [],
+        "subjects":         profile.subjects if profile else [],
+        "languages":        profile.languages if profile else [],
+        "achievements":     profile.achievements if profile else None,
+        # category_id is already in user.__dict__
+    }
 
 
 @router.post("/sync", response_model=TeacherSyncResponse)
@@ -33,7 +67,6 @@ def sync_teacher(request: TeacherSyncRequest, db: Session = Depends(get_db)):
 
     IMPORTANT: If this phone is already registered as STUDENT, returns 403.
     """
-    # Verify Firebase token
     decoded_token = verify_firebase_token(request.id_token)
     if not decoded_token:
         raise HTTPException(
@@ -50,16 +83,12 @@ def sync_teacher(request: TeacherSyncRequest, db: Session = Depends(get_db)):
             detail="Firebase token missing UID"
         )
 
-    # --- Find existing user ---
-
-    # 1. Try by Firebase UID
+    # Find existing user
     user = db.query(User).filter(User.firebase_uid == firebase_uid).first()
 
-    # 2. If not found, try by phone number (handles re-install / new Firebase UID)
     if not user and phone_number:
         user = db.query(User).filter(User.phone_number == phone_number).first()
         if user:
-            # Same phone, new UID — update it
             user.firebase_uid = firebase_uid
             db.commit()
             db.refresh(user)
@@ -67,21 +96,17 @@ def sync_teacher(request: TeacherSyncRequest, db: Session = Depends(get_db)):
     is_new_user = False
 
     if user:
-        # --- EXISTING USER ---
-        # Block if they're a student trying to use teacher app
         if user.role == UserRole.STUDENT:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This phone is registered as a Student. Please use the Student App."
             )
-        # Block if they're an admin
         if user.role == UserRole.ADMIN:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This phone is registered as an Admin. Cannot use Teacher App."
             )
     else:
-        # --- NEW USER ---
         user = User(
             firebase_uid=firebase_uid,
             phone_number=phone_number,
@@ -93,7 +118,6 @@ def sync_teacher(request: TeacherSyncRequest, db: Session = Depends(get_db)):
         db.refresh(user)
         is_new_user = True
 
-    # Create local JWT
     access_token = create_access_token(
         data={"sub": str(user.id), "role": user.role.value}
     )
@@ -112,56 +136,92 @@ def complete_teacher_onboarding(
     current_user: User = Depends(get_current_teacher),
 ):
     """
-    Teacher completes onboarding by providing name and optional details.
-    Called after first sync when is_new_user=true.
+    Teacher completes full Practo-style onboarding.
+
+    Saves:
+      - Basic info (name, email, category)
+      - Proposed rate (validated against platform max ceiling)
+      - Rich profile (bio, education, experience, subjects, languages, achievements)
+      - Creates/updates TeacherProfile with status = PENDING
+
+    After this, admin reviews and approves via POST /api/admin/teachers/{id}/approve.
     """
-    current_user.name = request.name
+    from app.models.category import Category
+    from app.models.teacher_profile import TeacherProfile, TeacherStatus
+    from app.routers.admin.config import get_max_teacher_rate
+
+    # ── Validate proposed rate against platform ceiling ───────────────────────
+    if request.proposed_rate_per_minute is not None:
+        max_rate = get_max_teacher_rate(db)
+        if request.proposed_rate_per_minute <= 0:
+            raise HTTPException(status_code=400, detail="Proposed rate must be greater than 0")
+        if request.proposed_rate_per_minute > max_rate:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Proposed rate ₹{request.proposed_rate_per_minute}/min exceeds "
+                       f"platform maximum of ₹{max_rate}/min",
+            )
+
+    # ── Update User fields ────────────────────────────────────────────────────
+    current_user.name                = request.name
     current_user.onboarding_completed = True
+
     if request.profile_image_url:
         current_user.profile_image_url = request.profile_image_url
 
     if request.email:
-        # Check email not already taken
         existing = db.query(User).filter(
             User.email == request.email, User.id != current_user.id
         ).first()
         if existing:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already in use"
-            )
+            raise HTTPException(status_code=400, detail="Email already in use")
         current_user.email = request.email
 
-    # Validate Category
-    from app.models.category import Category
-    from app.models.teacher_profile import TeacherProfile, TeacherStatus
-    
+    # ── Validate Category ─────────────────────────────────────────────────────
     category = db.query(Category).filter(Category.id == request.category_id).first()
     if not category:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid Category ID"
-        )
+        raise HTTPException(status_code=400, detail="Invalid Category ID")
     current_user.category_id = request.category_id
 
-    # --- ARCHITECT FIX: Create/Update Teacher Profile ---
-    profile = db.query(TeacherProfile).filter(TeacherProfile.user_id == current_user.id).first()
+    # ── Create/Update TeacherProfile ──────────────────────────────────────────
+    profile = db.query(TeacherProfile).filter(
+        TeacherProfile.user_id == current_user.id
+    ).first()
     if not profile:
         profile = TeacherProfile(user_id=current_user.id)
         db.add(profile)
-    
-    profile.document_url = request.document_url
-    profile.status = TeacherStatus.PENDING  # Reset to pending on onboarding/update
-    
+
+    profile.document_url  = request.document_url
+    profile.status        = TeacherStatus.PENDING   # reset to pending on re-onboard
+
+    # Rate proposal
+    if request.proposed_rate_per_minute is not None:
+        profile.proposed_rate_per_minute = request.proposed_rate_per_minute
+
+    # Rich profile
+    if request.bio is not None:
+        profile.bio = request.bio
+    if request.experience_years is not None:
+        profile.experience_years = request.experience_years
+    if request.institution_name is not None:
+        profile.institution_name = request.institution_name
+    if request.location is not None:
+        profile.location = request.location
+    if request.education is not None:
+        profile.education = request.education
+    if request.experience is not None:
+        profile.experience = request.experience
+    if request.subjects is not None:
+        profile.subjects = request.subjects
+    if request.languages is not None:
+        profile.languages = request.languages
+    if request.achievements is not None:
+        profile.achievements = request.achievements
+
     db.commit()
     db.refresh(current_user)
-    
-    # Return merged data for the schema
-    return {
-        **current_user.__dict__,
-        "status": profile.status,
-        "document_url": profile.document_url,
-    }
+
+    return _build_teacher_response(current_user, db)
 
 
 @router.post("/upload-document")
@@ -171,11 +231,10 @@ async def upload_teacher_document(
 ):
     """
     Step 1.5 of Onboarding: Teacher picks a file and uploads it.
-    The backend uploads it to your GCP bucket and returns the final URL.
+    Returns the final URL to include in the onboarding PATCH request.
     """
-    # This will use the GCP bucket because DEBUG=False in your .env
     file_url = await upload_file(
-        file, 
+        file,
         folder=f"teachers/docs/{current_user.id}",
         allowed_types=ALLOWED_DOCUMENT_TYPES
     )
@@ -184,18 +243,11 @@ async def upload_teacher_document(
 
 @router.get("/profile", response_model=TeacherProfileResponse)
 def get_teacher_profile(
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_teacher),
 ):
     """
-    Get current teacher's profile.
-    Pulls data from both User data and TeacherProfile tables.
+    Get current teacher's full profile.
+    Merges User, TeacherProfile, Category, and TeacherRate tables.
     """
-    # Merge basic user data with extra teacher profile info
-    profile = current_user.teacher_profile
-    return {
-        **current_user.__dict__,
-        "status": profile.status if profile else "pending",
-        "document_url": profile.document_url if profile else None,
-        "rejection_reason": profile.rejection_reason if profile else None,
-        "category_id": profile.category_id if profile else None,
-    }
+    return _build_teacher_response(current_user, db)

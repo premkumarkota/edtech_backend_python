@@ -49,6 +49,9 @@ class User(Base):
     document_url   = Column(String(500), nullable=True)
     is_verified    = Column(Boolean, default=False)
 
+    # FCM push notification token (set by mobile app on login)
+    fcm_token      = Column(String(500), nullable=True)
+
     # FK to primary category
     category_id    = Column(Integer, ForeignKey("categories.id"), nullable=True)
 

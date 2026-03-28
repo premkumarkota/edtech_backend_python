@@ -12,9 +12,11 @@ from app.database import engine, Base
 # ── Import ALL models in FK-dependency order so Base.metadata has them all ──
 from app.models import (  # noqa: F401
     Category, User, UserRole,
+    PlatformConfig,
     StudentProfile, TeacherProfile, TeacherStatus,
     Syllabus,
     Quiz, QuizQuestion, QuizAttempt, QuizAnswer,
+    TeacherAvailability, TeacherAvailabilityOverride,
 )
 
 # ── Routers ──────────────────────────────────────────────────────────────────
@@ -26,6 +28,8 @@ from app.routers.admin import syllabus as admin_syllabus
 from app.routers.admin import quiz as admin_quiz
 from app.routers.admin import plans as admin_plans
 from app.routers.admin import payouts as admin_payouts
+from app.routers.admin import config as admin_config
+from app.routers.admin import stats as admin_stats
 
 from app.routers.common import categories as common_categories
 
@@ -37,12 +41,9 @@ from app.routers.student import subscription as student_subscription
 from app.routers.student import sessions as student_sessions
 from app.dependencies.auth import security
 
-try:
-    from app.routers.student import profile as student_profile
-    from app.routers.teacher import profile as teacher_profile
-    _has_profiles = True
-except ImportError:
-    _has_profiles = False
+from app.routers.student import profile as student_profile
+from app.routers.teacher import profile as teacher_profile
+from app.routers.teacher import availability as teacher_availability
 
 from app.routers.teacher import auth as teacher_auth
 from app.routers.teacher import sessions as teacher_sessions
@@ -131,6 +132,14 @@ app.include_router(admin_payouts.router,
                    prefix="/api/admin",
                    tags=["Admin - Payouts & Rates"])
 
+app.include_router(admin_config.router,
+                   prefix="/api/admin/config",
+                   tags=["Admin - Platform Config"])
+
+app.include_router(admin_stats.router,
+                   prefix="/api/admin/stats",
+                   tags=["Admin - Dashboard Stats"])
+
 
 # ═══════════════════════════════════════════════════════════════
 # COMMON APIs
@@ -168,10 +177,9 @@ app.include_router(student_sessions.router,
                    prefix="/api/student/sessions",
                    tags=["Student - Video Call Sessions"])
 
-if _has_profiles:
-    app.include_router(student_profile.router,
-                       prefix="/api/student/profile",
-                       tags=["Student - Profile"])
+app.include_router(student_profile.router,
+                   prefix="/api/student/profile",
+                   tags=["Student - Profile"])
 
 # ═══════════════════════════════════════════════════════════════
 # TEACHER APP APIs
@@ -185,10 +193,13 @@ app.include_router(teacher_sessions.router,
                    prefix="/api/teacher",
                    tags=["Teacher - Sessions & Earnings"])
 
-if _has_profiles:
-    app.include_router(teacher_profile.router,
-                       prefix="/api/teacher/profile",
-                       tags=["Teacher - Profile"])
+app.include_router(teacher_profile.router,
+                   prefix="/api/teacher/profile",
+                   tags=["Teacher - Profile"])
+
+app.include_router(teacher_availability.router,
+                   prefix="/api/teacher/availability",
+                   tags=["Teacher - Availability"])
 
 # ═══════════════════════════════════════════════════════════════
 # PAYMENT WEBHOOK (no JWT — HMAC signature verified)

@@ -1,5 +1,6 @@
 import enum
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, Text, Numeric, DateTime, ForeignKey, Enum
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -15,25 +16,51 @@ class TeacherProfile(Base):
     """
     Extended teacher-specific profile info.
     1:1 with users where role = 'teacher'.
-    Tracks verification status (pending/approved/rejected).
+
+    Tracks:
+      - Verification status (pending/approved/rejected)
+      - Rich Practo-style profile (education, experience, subjects, languages)
+      - Proposed rate (what teacher wants) vs approved rate (in teacher_rates table)
     """
     __tablename__ = "teacher_profiles"
 
     id               = Column(Integer, primary_key=True, index=True)
     user_id          = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
                               unique=True, nullable=False)
-    institution_name = Column(String(200), nullable=True)
-    location         = Column(String(200), nullable=True)
-    bio              = Column(Text, nullable=True)
-    experience_years = Column(Integer, nullable=True)
-    document_url     = Column(String(500), nullable=True)  # Verification PDF/image
 
+    # ── Basic profile ─────────────────────────────────────────────────────────
+    institution_name = Column(String(200), nullable=True)   # Primary institution
+    location         = Column(String(200), nullable=True)
+    bio              = Column(Text, nullable=True)           # About the teacher
+    experience_years = Column(Integer, nullable=True)        # Total years (summary)
+    document_url     = Column(String(500), nullable=True)    # Verification PDF/image
+
+    # ── Rich profile (Practo-style) ───────────────────────────────────────────
+    # education: [{ "degree": "B.Tech", "institution": "IIT Delhi", "year_of_passing": 2010 }]
+    education    = Column(JSONB, nullable=True, default=list)
+
+    # experience: [{ "role": "Professor", "institution": "IIT Bombay",
+    #                "from_year": 2015, "to_year": null, "is_current": true }]
+    experience   = Column(JSONB, nullable=True, default=list)
+
+    # subjects: ["Mathematics", "Physics"]
+    subjects     = Column(JSONB, nullable=True, default=list)
+
+    # languages: ["English", "Hindi", "Tamil"]
+    languages    = Column(JSONB, nullable=True, default=list)
+
+    achievements = Column(Text, nullable=True)  # Awards, publications, notable mentions
+
+    # ── Rate negotiation ──────────────────────────────────────────────────────
+    # Teacher proposes during onboarding. Admin approves (stored in teacher_rates).
+    proposed_rate_per_minute = Column(Numeric(8, 2), nullable=True)
+
+    # ── Verification ──────────────────────────────────────────────────────────
     status = Column(
         Enum(TeacherStatus, values_callable=lambda x: [e.value for e in x]),
         default=TeacherStatus.PENDING.value,
         nullable=False,
     )
-
     reviewed_by      = Column(Integer, ForeignKey("users.id"), nullable=True)
     reviewed_at      = Column(DateTime(timezone=True), nullable=True)
     rejection_reason = Column(Text, nullable=True)

@@ -1,23 +1,60 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+
 from app.database import get_db
-from app.models.user import User, UserRole
-from app.dependencies import get_current_user
-from app.schemas.teacher import TeacherProfileResponse
+from app.dependencies import get_current_teacher
+from app.models.user import User
+from app.models.teacher_profile import TeacherProfile
+from app.schemas.teacher import TeacherProfileResponse, TeacherProfileUpdateRequest
+from app.routers.teacher.auth import _build_teacher_response
 
 router = APIRouter()
 
-@router.get("/{user_id}", response_model=TeacherProfileResponse)
-def get_public_teacher_profile(
-    user_id: int,
+
+@router.patch("/update", response_model=TeacherProfileResponse)
+def update_teacher_profile(
+    request: TeacherProfileUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_teacher),
 ):
     """
-    Get profile of a teacher by ID.
-    Requires authentication (Any valid user).
+    Teacher updates their rich profile after onboarding.
+    All fields optional — partial update, only provided fields are changed.
+
+    CAN update:  profile_image_url, bio, experience_years, institution_name,
+                 location, education[], experience[], subjects[], languages[], achievements
+    CANNOT change via this: document_url, category_id, proposed_rate_per_minute
+                 (re-do PATCH /auth/onboarding for those — triggers re-review)
     """
-    user = db.query(User).filter(User.id == user_id, User.role == UserRole.TEACHER).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Teacher not found")
-    return user
+    profile = db.query(TeacherProfile).filter(
+        TeacherProfile.user_id == current_user.id
+    ).first()
+
+    # User-level fields
+    if request.profile_image_url is not None:
+        current_user.profile_image_url = request.profile_image_url
+
+    # TeacherProfile-level fields
+    if profile:
+        if request.bio is not None:
+            profile.bio = request.bio
+        if request.experience_years is not None:
+            profile.experience_years = request.experience_years
+        if request.institution_name is not None:
+            profile.institution_name = request.institution_name
+        if request.location is not None:
+            profile.location = request.location
+        if request.education is not None:
+            profile.education = request.education
+        if request.experience is not None:
+            profile.experience = request.experience
+        if request.subjects is not None:
+            profile.subjects = request.subjects
+        if request.languages is not None:
+            profile.languages = request.languages
+        if request.achievements is not None:
+            profile.achievements = request.achievements
+
+    db.commit()
+    db.refresh(current_user)
+    return _build_teacher_response(current_user, db)

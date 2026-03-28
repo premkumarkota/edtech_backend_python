@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List, Any
 from datetime import datetime
 
 
@@ -16,6 +16,25 @@ class AdminCreateRequest(BaseModel):
     name: str
     email: EmailStr
     password: str
+
+
+class TeacherApprovalRequest(BaseModel):
+    """
+    Admin approves or rejects a pending teacher.
+    Rate resolution (priority order):
+      1. approved_rate_per_minute  — admin override
+      2. teacher's proposed_rate_per_minute
+      3. platform default ₹2.00/min
+    All rates validated ≤ platform_config.max_teacher_rate_per_minute.
+    """
+    approved: bool
+    approved_rate_per_minute: Optional[float] = None
+    rejection_reason: Optional[str] = None
+
+
+class PlatformConfigUpdateRequest(BaseModel):
+    """Update a platform config value (admin only)"""
+    value: str
 
 
 # ========== RESPONSE SCHEMAS ==========
@@ -86,3 +105,52 @@ class UserStatsResponse(BaseModel):
     active_teachers: int
     onboarded_students: int
     onboarded_teachers: int
+
+
+# ========== TEACHER PENDING APPROVAL ==========
+
+class TeacherPendingResponse(BaseModel):
+    """
+    Teacher shown in admin pending-approvals list.
+    Full rich profile so admin can make an informed decision before approving.
+    """
+    id: int
+    name: Optional[str] = None
+    phone_number: Optional[str] = None
+    email: Optional[str] = None
+    profile_image_url: Optional[str] = None
+    category_id: Optional[int] = None
+    category_name: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    # From teacher_profile
+    status: str = "pending"
+    document_url: Optional[str] = None
+    bio: Optional[str] = None
+    experience_years: Optional[int] = None
+    institution_name: Optional[str] = None
+    location: Optional[str] = None
+    education: Optional[List[Any]] = None
+    experience: Optional[List[Any]] = None
+    subjects: Optional[List[str]] = None
+    languages: Optional[List[str]] = None
+    achievements: Optional[str] = None
+
+    # Rate negotiation
+    proposed_rate_per_minute: Optional[float] = None   # what the teacher asked for
+    current_rate_per_minute: Optional[float] = None    # currently approved rate (null = not set yet)
+
+    class Config:
+        from_attributes = True
+
+
+# ========== PLATFORM CONFIG ==========
+
+class PlatformConfigResponse(BaseModel):
+    key: str
+    value: str
+    description: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

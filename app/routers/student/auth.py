@@ -155,7 +155,9 @@ def complete_student_onboarding(
 
     db.commit()
     db.refresh(current_user)
-    
+
+    category_name = category.name if category else None
+
     # Return merged data for the schema
     return {
         **current_user.__dict__,
@@ -163,22 +165,27 @@ def complete_student_onboarding(
         "age": profile.age,
         "school_college": profile.school_college,
         "location": profile.location,
+        "category_name": category_name,
     }
 
 
 @router.get("/profile", response_model=StudentProfileResponse)
 def get_student_profile(
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_student),
 ):
     """
     Get current student's profile.
     Merges core User data with academic StudentProfile data.
     """
+    from app.models.category import Category
     profile = current_user.student_profile
+    category = db.query(Category).filter(Category.id == current_user.category_id).first() if current_user.category_id else None
     return {
         **current_user.__dict__,
         "dob": profile.dob if profile else None,
         "age": profile.age if profile else None,
         "school_college": profile.school_college if profile else None,
         "location": profile.location if profile else None,
+        "category_name": category.name if category else None,
     }
