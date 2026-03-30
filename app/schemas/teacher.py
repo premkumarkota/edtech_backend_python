@@ -23,7 +23,7 @@ class TeacherOnboardingRequest(BaseModel):
     category_id: int
 
     # Proposed rate (validated against platform max)
-    proposed_rate_per_minute: Optional[float] = None
+    proposed_rate_per_hour: Optional[float] = None
 
     # Rich profile fields
     bio: Optional[str] = None
@@ -90,8 +90,8 @@ class TeacherProfileResponse(BaseModel):
     category_name: Optional[str] = None
 
     # Rate
-    proposed_rate_per_minute: Optional[float] = None   # what teacher asked
-    rate_per_minute: Optional[float] = None            # what admin approved
+    proposed_rate_per_hour: Optional[float] = None   # what teacher asked
+    rate_per_hour: Optional[float] = None               # what admin approved
 
     # Rich profile
     bio: Optional[str] = None

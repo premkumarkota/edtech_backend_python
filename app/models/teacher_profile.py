@@ -53,7 +53,7 @@ class TeacherProfile(Base):
 
     # ── Rate negotiation ──────────────────────────────────────────────────────
     # Teacher proposes during onboarding. Admin approves (stored in teacher_rates).
-    proposed_rate_per_minute = Column(Numeric(8, 2), nullable=True)
+    proposed_rate_per_hour = Column(Numeric(8, 2), nullable=True)
 
     # ── Verification ──────────────────────────────────────────────────────────
     status = Column(

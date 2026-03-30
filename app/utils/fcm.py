@@ -118,6 +118,32 @@ def notify_student_session_cancelled(
     )
 
 
+def notify_teacher_approved(
+    fcm_token: str,
+    teacher_name: str,
+    rate_per_hour: float,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Profile Approved!",
+        body=f"Congratulations {teacher_name}! Your profile has been approved. Your rate is ₹{rate_per_hour}/hr.",
+        data={"type": "profile_approved", "rate_per_hour": rate_per_hour},
+    )
+
+
+def notify_teacher_rejected(
+    fcm_token: str,
+    teacher_name: str,
+    reason: str,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Profile Not Approved",
+        body=f"Hi {teacher_name}, your profile needs revision. Reason: {reason}",
+        data={"type": "profile_rejected"},
+    )
+
+
 def notify_session_reminder(
     fcm_token: str,
     other_party_name: str,

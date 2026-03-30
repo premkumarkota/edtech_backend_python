@@ -7,9 +7,9 @@ from decimal import Decimal
 # ── Teacher Rate Schemas ─────────────────────────────────────────
 
 class TeacherRateSet(BaseModel):
-    rate_per_minute: Decimal
+    rate_per_hour: Decimal
 
-    @validator("rate_per_minute")
+    @validator("rate_per_hour")
     def rate_positive(cls, v):
         if v < 0:
             raise ValueError("Rate must be non-negative")
@@ -19,7 +19,7 @@ class TeacherRateSet(BaseModel):
 class TeacherRateResponse(BaseModel):
     teacher_id: int
     teacher_name: Optional[str]
-    rate_per_minute: Decimal
+    rate_per_hour: Decimal
     updated_at: Optional[datetime]
 
     class Config:
@@ -72,7 +72,7 @@ class TeacherEarningItem(BaseModel):
     id: int
     session_id: int
     duration_mins: int
-    rate_per_minute: Decimal
+    rate_per_hour: Decimal
     gross_earning: Decimal
     payout_status: str
     created_at: datetime

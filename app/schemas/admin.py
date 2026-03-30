@@ -22,13 +22,12 @@ class TeacherApprovalRequest(BaseModel):
     """
     Admin approves or rejects a pending teacher.
     Rate resolution (priority order):
-      1. approved_rate_per_minute  — admin override
-      2. teacher's proposed_rate_per_minute
-      3. platform default ₹2.00/min
-    All rates validated ≤ platform_config.max_teacher_rate_per_minute.
+      1. approved_rate_per_hour  — admin sets the hourly rate
+      2. teacher's proposed_rate_per_hour
+    No platform ceiling — admin has full control.
     """
     approved: bool
-    approved_rate_per_minute: Optional[float] = None
+    approved_rate_per_hour: Optional[float] = None
     rejection_reason: Optional[str] = None
 
 
@@ -137,8 +136,8 @@ class TeacherPendingResponse(BaseModel):
     achievements: Optional[str] = None
 
     # Rate negotiation
-    proposed_rate_per_minute: Optional[float] = None   # what the teacher asked for
-    current_rate_per_minute: Optional[float] = None    # currently approved rate (null = not set yet)
+    proposed_rate_per_hour: Optional[float] = None     # what the teacher asked for
+    current_rate_per_hour: Optional[float] = None      # currently approved rate (null = not set yet)
 
     class Config:
         from_attributes = True

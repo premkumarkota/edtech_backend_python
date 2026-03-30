@@ -14,9 +14,9 @@ from app.models.user import User
 
 
 def get_teacher_rate(teacher_id: int, db: Session) -> Decimal:
-    """Get the current per-minute rate for a teacher. Default 2.00 if not set."""
+    """Get the current hourly rate for a teacher. Default 0.00 if not set."""
     rate = db.query(TeacherRate).filter(TeacherRate.teacher_id == teacher_id).first()
-    return rate.rate_per_minute if rate else Decimal("2.00")
+    return rate.rate_per_hour if rate else Decimal("0.00")
 
 
 def calculate_and_create_payout_batch(
@@ -123,13 +123,13 @@ def create_teacher_earning(
     Looks up teacher's current rate, calculates earning, creates record.
     """
     rate = get_teacher_rate(session.teacher_id, db)
-    gross = Decimal(str(actual_duration_mins)) * rate
+    gross = (Decimal(str(actual_duration_mins)) / Decimal("60")) * rate
 
     earning = TeacherEarning(
         teacher_id=session.teacher_id,
         session_id=session.id,
         duration_mins=actual_duration_mins,
-        rate_per_minute=rate,
+        rate_per_hour=rate,
         gross_earning=gross,
         payout_status="pending",
     )

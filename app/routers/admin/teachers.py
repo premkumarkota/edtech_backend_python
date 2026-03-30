@@ -9,12 +9,12 @@ from app.models.user import User, UserRole
 from app.models.teacher_profile import TeacherProfile, TeacherStatus
 from app.models.payout import TeacherRate
 from app.models.category import Category
-from app.routers.admin.config import get_max_teacher_rate
 from app.schemas.admin import TeacherPendingResponse, TeacherApprovalRequest, MessageResponse
+from app.utils.fcm import notify_teacher_approved, notify_teacher_rejected
 
 router = APIRouter()
 
-DEFAULT_RATE = 2.00
+DEFAULT_RATE = 0.00
 
 
 def _build_pending_response(teacher: User, db: Session) -> dict:
@@ -37,8 +37,8 @@ def _build_pending_response(teacher: User, db: Session) -> dict:
         "subjects":         profile.subjects if profile else [],
         "languages":        profile.languages if profile else [],
         "achievements":     profile.achievements if profile else None,
-        "proposed_rate_per_minute": float(profile.proposed_rate_per_minute) if (profile and profile.proposed_rate_per_minute) else None,
-        "current_rate_per_minute":  float(rate_row.rate_per_minute) if rate_row else None,
+        "proposed_rate_per_hour": float(profile.proposed_rate_per_hour) if (profile and profile.proposed_rate_per_hour) else None,
+        "current_rate_per_hour":  float(rate_row.rate_per_hour) if rate_row else None,
     }
 
 
@@ -103,22 +103,15 @@ def approve_or_reject_teacher(
 
     if body.approved:
         # ── Resolve final rate ────────────────────────────────────────────────
-        max_rate = get_max_teacher_rate(db)
-
-        if body.approved_rate_per_minute is not None:
-            final_rate = body.approved_rate_per_minute
-        elif profile.proposed_rate_per_minute is not None:
-            final_rate = float(profile.proposed_rate_per_minute)
+        if body.approved_rate_per_hour is not None:
+            final_rate = body.approved_rate_per_hour
+        elif profile.proposed_rate_per_hour is not None:
+            final_rate = float(profile.proposed_rate_per_hour)
         else:
             final_rate = DEFAULT_RATE
 
-        if final_rate <= 0:
-            raise HTTPException(status_code=400, detail="Rate must be greater than 0")
-        if final_rate > max_rate:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Rate ₹{final_rate}/min exceeds platform maximum of ₹{max_rate}/min",
-            )
+        if final_rate < 0:
+            raise HTTPException(status_code=400, detail="Rate must be non-negative")
 
         # ── Update TeacherProfile ─────────────────────────────────────────────
         profile.status           = TeacherStatus.APPROVED
@@ -130,19 +123,28 @@ def approve_or_reject_teacher(
         # ── Upsert teacher_rates ──────────────────────────────────────────────
         rate_row = db.query(TeacherRate).filter(TeacherRate.teacher_id == teacher_id).first()
         if rate_row:
-            rate_row.rate_per_minute = final_rate
+            rate_row.rate_per_hour   = final_rate
             rate_row.set_by_admin_id = admin.id
         else:
             db.add(TeacherRate(
                 teacher_id=teacher_id,
-                rate_per_minute=final_rate,
+                rate_per_hour=final_rate,
                 set_by_admin_id=admin.id,
             ))
 
         db.commit()
+
+        # FCM push to teacher (non-blocking)
+        if teacher.fcm_token:
+            notify_teacher_approved(
+                fcm_token=teacher.fcm_token,
+                teacher_name=teacher.name or "Teacher",
+                rate_per_hour=final_rate,
+            )
+
         return MessageResponse(
             message=(
-                f"Teacher '{teacher.name}' approved at ₹{final_rate}/min. "
+                f"Teacher '{teacher.name}' approved at ₹{final_rate}/hr. "
                 "They will now appear in student home feeds."
             ),
             success=True,
@@ -163,6 +165,15 @@ def approve_or_reject_teacher(
         teacher.is_verified      = False
 
         db.commit()
+
+        # FCM push to teacher (non-blocking)
+        if teacher.fcm_token:
+            notify_teacher_rejected(
+                fcm_token=teacher.fcm_token,
+                teacher_name=teacher.name or "Teacher",
+                reason=body.rejection_reason,
+            )
+
         return MessageResponse(
             message=f"Teacher '{teacher.name}' rejected. Reason: {body.rejection_reason}",
             success=True,
@@ -180,30 +191,26 @@ def update_teacher_rate(
     Update an already-approved teacher's rate at any time.
     Only affects FUTURE sessions — existing earnings already have the old rate snapshotted.
     """
-    new_rate = body.get("rate_per_minute")
+    new_rate = body.get("rate_per_hour")
     if new_rate is None:
-        raise HTTPException(status_code=400, detail="rate_per_minute is required")
+        raise HTTPException(status_code=400, detail="rate_per_hour is required")
 
-    max_rate = get_max_teacher_rate(db)
-    if float(new_rate) > max_rate:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Rate ₹{new_rate}/min exceeds platform maximum of ₹{max_rate}/min",
-        )
+    if float(new_rate) < 0:
+        raise HTTPException(status_code=400, detail="Rate must be non-negative")
 
     rate_row = db.query(TeacherRate).filter(TeacherRate.teacher_id == teacher_id).first()
     if rate_row:
-        rate_row.rate_per_minute = new_rate
+        rate_row.rate_per_hour   = new_rate
         rate_row.set_by_admin_id = admin.id
     else:
         db.add(TeacherRate(
             teacher_id=teacher_id,
-            rate_per_minute=new_rate,
+            rate_per_hour=new_rate,
             set_by_admin_id=admin.id,
         ))
 
     db.commit()
     return MessageResponse(
-        message=f"Rate updated to ₹{new_rate}/min for teacher {teacher_id}",
+        message=f"Rate updated to ₹{new_rate}/hr for teacher {teacher_id}",
         success=True,
     )

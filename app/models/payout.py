@@ -6,7 +6,7 @@ from app.database import Base
 
 class TeacherRate(Base):
     """
-    Per-teacher rate set by admin (INR per minute).
+    Per-teacher rate set by admin (INR per hour).
     One row per teacher — admin updates in-place.
     """
     __tablename__ = "teacher_rates"
@@ -14,7 +14,7 @@ class TeacherRate(Base):
     id             = Column(Integer, primary_key=True, index=True)
     teacher_id     = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
                             unique=True, nullable=False, index=True)
-    rate_per_minute = Column(Numeric(8, 2), nullable=False, default=2.00)
+    rate_per_hour  = Column(Numeric(8, 2), nullable=False, default=0.00)
     set_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at      = Column(DateTime(timezone=True), server_default=func.now())
     updated_at      = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -35,9 +35,9 @@ class TeacherEarning(Base):
     teacher_id     = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     session_id     = Column(Integer, ForeignKey("video_call_sessions.id"), nullable=False, unique=True)
 
-    duration_mins   = Column(Integer, nullable=False)
-    rate_per_minute = Column(Numeric(8, 2), nullable=False)
-    gross_earning   = Column(Numeric(10, 2), nullable=False)   # duration_mins × rate_per_minute
+    duration_mins  = Column(Integer, nullable=False)
+    rate_per_hour  = Column(Numeric(8, 2), nullable=False)
+    gross_earning  = Column(Numeric(10, 2), nullable=False)   # (duration_mins / 60) × rate_per_hour
 
     # Payout tracking
     payout_status  = Column(String(20), nullable=False, default="pending")  # pending / paid

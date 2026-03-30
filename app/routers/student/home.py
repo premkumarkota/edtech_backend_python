@@ -20,7 +20,7 @@ router = APIRouter()
 
 def _get_rate(teacher_id: int, rate_map: dict) -> float:
     """Return approved rate for a teacher, or platform default."""
-    return rate_map.get(teacher_id, 2.00)
+    return rate_map.get(teacher_id, 0.00)
 
 
 @router.get("/teachers", response_model=HomeFeedResponse)
@@ -66,7 +66,7 @@ def get_home_feed(
     # Batch-fetch all rates for these teachers (2 queries total, no N+1)
     teacher_ids = [t.id for t in teachers]
     rates = db.query(TeacherRate).filter(TeacherRate.teacher_id.in_(teacher_ids)).all()
-    rate_map = {r.teacher_id: float(r.rate_per_minute) for r in rates}
+    rate_map = {r.teacher_id: float(r.rate_per_hour) for r in rates}
 
     teacher_cards = [
         TeacherCardResponse(
@@ -78,7 +78,7 @@ def get_home_feed(
             bio=t.teacher_profile.bio if t.teacher_profile else None,
             experience_years=t.teacher_profile.experience_years if t.teacher_profile else None,
             institution_name=t.teacher_profile.institution_name if t.teacher_profile else None,
-            rate_per_minute=_get_rate(t.id, rate_map),
+            rate_per_hour=_get_rate(t.id, rate_map),
             subjects=t.teacher_profile.subjects if t.teacher_profile else [],
             languages=t.teacher_profile.languages if t.teacher_profile else [],
         )
@@ -134,7 +134,7 @@ def get_teacher_detail(
         category_id=teacher.category_id,
         category_name=category.name if category else None,
         location=profile.location if profile else None,
-        rate_per_minute=float(rate_row.rate_per_minute) if rate_row else 2.00,
+        rate_per_hour=float(rate_row.rate_per_hour) if rate_row else 0.00,
         bio=profile.bio if profile else None,
         experience_years=profile.experience_years if profile else None,
         institution_name=profile.institution_name if profile else None,

@@ -37,8 +37,8 @@ def _build_teacher_response(user: User, db: Session) -> dict:
         "rejection_reason": profile.rejection_reason if profile else None,
         "reviewed_at":      profile.reviewed_at if profile else None,
         "category_name":    category.name if category else None,
-        "rate_per_minute":  float(rate_row.rate_per_minute) if rate_row else 2.00,
-        "proposed_rate_per_minute": float(profile.proposed_rate_per_minute) if (profile and profile.proposed_rate_per_minute) else None,
+        "rate_per_hour":          float(rate_row.rate_per_hour) if rate_row else None,
+        "proposed_rate_per_hour": float(profile.proposed_rate_per_hour) if (profile and profile.proposed_rate_per_hour) else None,
         # Rich profile fields
         "bio":              profile.bio if profile else None,
         "experience_years": profile.experience_years if profile else None,
@@ -148,19 +148,10 @@ def complete_teacher_onboarding(
     """
     from app.models.category import Category
     from app.models.teacher_profile import TeacherProfile, TeacherStatus
-    from app.routers.admin.config import get_max_teacher_rate
-
-    # ── Validate proposed rate against platform ceiling ───────────────────────
-    if request.proposed_rate_per_minute is not None:
-        max_rate = get_max_teacher_rate(db)
-        if request.proposed_rate_per_minute <= 0:
-            raise HTTPException(status_code=400, detail="Proposed rate must be greater than 0")
-        if request.proposed_rate_per_minute > max_rate:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Proposed rate ₹{request.proposed_rate_per_minute}/min exceeds "
-                       f"platform maximum of ₹{max_rate}/min",
-            )
+    # ── Validate proposed rate ────────────────────────────────────────────────
+    if request.proposed_rate_per_hour is not None:
+        if request.proposed_rate_per_hour < 0:
+            raise HTTPException(status_code=400, detail="Proposed rate must be non-negative")
 
     # ── Update User fields ────────────────────────────────────────────────────
     current_user.name                = request.name
@@ -195,8 +186,8 @@ def complete_teacher_onboarding(
     profile.status        = TeacherStatus.PENDING   # reset to pending on re-onboard
 
     # Rate proposal
-    if request.proposed_rate_per_minute is not None:
-        profile.proposed_rate_per_minute = request.proposed_rate_per_minute
+    if request.proposed_rate_per_hour is not None:
+        profile.proposed_rate_per_hour = request.proposed_rate_per_hour
 
     # Rich profile
     if request.bio is not None:

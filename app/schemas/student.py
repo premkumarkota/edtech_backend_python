@@ -76,7 +76,7 @@ class TeacherCardResponse(BaseModel):
     institution_name: Optional[str] = None
 
     # NEW: shown on card so student knows cost before tapping
-    rate_per_minute: Optional[float] = None
+    rate_per_hour: Optional[float] = None
     subjects: Optional[list] = None
     languages: Optional[list] = None
 
@@ -96,7 +96,7 @@ class TeacherDetailResponse(BaseModel):
     category_id: Optional[int] = None
     category_name: Optional[str] = None
     location: Optional[str] = None
-    rate_per_minute: Optional[float] = None
+    rate_per_hour: Optional[float] = None
 
     # Full rich profile
     bio: Optional[str] = None

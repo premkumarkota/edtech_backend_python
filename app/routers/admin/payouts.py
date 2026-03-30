@@ -46,12 +46,12 @@ def set_teacher_rate(
 
     rate = db.query(TeacherRate).filter(TeacherRate.teacher_id == teacher_id).first()
     if rate:
-        rate.rate_per_minute = payload.rate_per_minute
+        rate.rate_per_hour   = payload.rate_per_hour
         rate.set_by_admin_id = admin.id
     else:
         rate = TeacherRate(
             teacher_id=teacher_id,
-            rate_per_minute=payload.rate_per_minute,
+            rate_per_hour=payload.rate_per_hour,
             set_by_admin_id=admin.id,
         )
         db.add(rate)
@@ -61,7 +61,7 @@ def set_teacher_rate(
     return {
         "teacher_id": teacher.id,
         "teacher_name": teacher.name,
-        "rate_per_minute": rate.rate_per_minute,
+        "rate_per_hour": rate.rate_per_hour,
         "updated_at": rate.updated_at,
     }
 
@@ -79,7 +79,7 @@ def list_teacher_rates(
         result.append({
             "teacher_id": t.id,
             "teacher_name": t.name,
-            "rate_per_minute": rate.rate_per_minute if rate else "2.00",
+            "rate_per_hour": rate.rate_per_hour if rate else "0.00",
             "updated_at": rate.updated_at if rate else None,
         })
     return result

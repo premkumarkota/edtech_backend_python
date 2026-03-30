@@ -46,6 +46,7 @@ from app.routers.teacher import profile as teacher_profile
 from app.routers.teacher import availability as teacher_availability
 
 from app.routers.teacher import auth as teacher_auth
+from app.routers.teacher import home as teacher_home
 from app.routers.teacher import sessions as teacher_sessions
 from app.routers.payments import router as payments_webhook
 
@@ -188,6 +189,10 @@ app.include_router(student_profile.router,
 app.include_router(teacher_auth.router,
                    prefix="/api/teacher/auth",
                    tags=["Teacher - Authentication"])
+
+app.include_router(teacher_home.router,
+                   prefix="/api/teacher/home",
+                   tags=["Teacher - Home"])
 
 app.include_router(teacher_sessions.router,
                    prefix="/api/teacher",

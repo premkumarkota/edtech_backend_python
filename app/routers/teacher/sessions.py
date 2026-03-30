@@ -17,12 +17,30 @@ from app.database import get_db
 from app.dependencies import get_current_teacher
 from app.models.user import User
 from app.models.session import VideoCallSession, SessionStatus
-from app.models.payout import TeacherEarning
+from app.models.payout import TeacherEarning, TeacherRate
 from app.schemas.session import SessionResponse, EndSessionRequest, EndSessionResponse
 from app.schemas.payout import TeacherEarningItem, TeacherEarningSummary
 from app.services.payout_service import create_teacher_earning
 
 router = APIRouter()
+
+
+@router.get("/rate")
+def get_my_rate(
+    teacher: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """
+    Teacher checks their approved hourly rate set by admin.
+    Returns null if admin hasn't set a rate yet (pending approval).
+    """
+    rate_row = db.query(TeacherRate).filter(TeacherRate.teacher_id == teacher.id).first()
+    return {
+        "teacher_id": teacher.id,
+        "rate_per_hour": float(rate_row.rate_per_hour) if rate_row else None,
+        "is_rate_set": rate_row is not None,
+        "message": f"Your approved rate is ₹{rate_row.rate_per_hour}/hr" if rate_row else "Rate not set yet. Awaiting admin approval.",
+    }
 
 
 @router.get("/sessions", response_model=List[SessionResponse])
