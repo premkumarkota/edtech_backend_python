@@ -9,7 +9,7 @@ from app.models.user import User, UserRole
 from app.models.teacher_profile import TeacherProfile, TeacherStatus
 from app.models.payout import TeacherRate
 from app.models.category import Category
-from app.schemas.admin import TeacherPendingResponse, TeacherApprovalRequest, MessageResponse
+from app.schemas.admin import TeacherVerificationResponse, TeacherPendingResponse, TeacherApprovalRequest, MessageResponse
 from app.utils.fcm import notify_teacher_approved, notify_teacher_rejected
 
 router = APIRouter()
@@ -37,8 +37,10 @@ def _build_pending_response(teacher: User, db: Session) -> dict:
         "subjects":         profile.subjects if profile else [],
         "languages":        profile.languages if profile else [],
         "achievements":     profile.achievements if profile else None,
+        "rejection_reason": profile.rejection_reason if profile else None,
         "proposed_rate_per_hour": float(profile.proposed_rate_per_hour) if (profile and profile.proposed_rate_per_hour) else None,
         "current_rate_per_hour":  float(rate_row.rate_per_hour) if rate_row else None,
+        "rate_per_hour":          float(rate_row.rate_per_hour) if rate_row else None,
     }
 
 
@@ -63,6 +65,49 @@ def get_pending_teachers(
         .all()
     )
     return [_build_pending_response(t, db) for t in teachers]
+
+
+@router.get("/status/{status}", response_model=List[TeacherVerificationResponse])
+def get_teachers_by_verification_status(
+    status: TeacherStatus,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """
+    List teachers by verification status: pending, approved, or rejected.
+    Returns full rich profile details for admin review tabs.
+    """
+    teachers = (
+        db.query(User)
+        .options(joinedload(User.teacher_profile))
+        .join(TeacherProfile, User.id == TeacherProfile.user_id)
+        .filter(
+            User.role == UserRole.TEACHER,
+            User.onboarding_completed == True,
+            TeacherProfile.status == status,
+        )
+        .order_by(User.created_at.desc())
+        .all()
+    )
+    return [_build_pending_response(t, db) for t in teachers]
+
+
+@router.get("/{teacher_id}", response_model=TeacherVerificationResponse)
+def get_teacher_detail(
+    teacher_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Return a full teacher profile for admin users and verification screens."""
+    teacher = (
+        db.query(User)
+        .options(joinedload(User.teacher_profile))
+        .filter(User.id == teacher_id, User.role == UserRole.TEACHER)
+        .first()
+    )
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    return _build_pending_response(teacher, db)
 
 
 @router.post("/{teacher_id}/approve", response_model=MessageResponse)

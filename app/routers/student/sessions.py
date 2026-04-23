@@ -6,6 +6,7 @@ POST /api/student/sessions/{id}/join     Get Agora token to join
 POST /api/student/sessions/{id}/cancel   Cancel a booking
 """
 import uuid
+import time as time_module
 from datetime import datetime, date, time, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -22,13 +23,26 @@ from app.schemas.session import (
 )
 from app.services.subscription_service import require_video_minutes
 from app.utils.fcm import notify_teacher_session_booked, notify_teacher_session_cancelled
+from app.config import settings
 
 router = APIRouter()
 
+# Agora role constants
+AGORA_ROLE_PUBLISHER = 1
+
 
 def _generate_agora_token(channel: str, uid: int) -> str:
-    """Generate Agora RTC token. Replace with real Agora token builder in production."""
-    return f"agora_dev_token_{channel}_{uid}"
+    """Generate Agora RTC token valid for 2 hours."""
+    from agora_token_builder import RtcTokenBuilder
+    expire_ts = int(time_module.time()) + 7200  # 2 hours
+    return RtcTokenBuilder.buildTokenWithUid(
+        settings.AGORA_APP_ID,
+        settings.AGORA_APP_CERTIFICATE,
+        channel,
+        uid,
+        AGORA_ROLE_PUBLISHER,
+        expire_ts,
+    )
 
 
 def _check_teacher_availability(

@@ -6,7 +6,8 @@ POST   /api/teacher/sessions/{id}/end      End session → deduct minutes + crea
 GET    /api/teacher/earnings/              My earning history
 GET    /api/teacher/earnings/summary       Monthly summary
 """
-from datetime import datetime, timezone
+import time as time_module
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
@@ -18,11 +19,28 @@ from app.dependencies import get_current_teacher
 from app.models.user import User
 from app.models.session import VideoCallSession, SessionStatus
 from app.models.payout import TeacherEarning, TeacherRate
-from app.schemas.session import SessionResponse, EndSessionRequest, EndSessionResponse
+from app.schemas.session import SessionResponse, EndSessionRequest, EndSessionResponse, JoinSessionResponse
 from app.schemas.payout import TeacherEarningItem, TeacherEarningSummary
 from app.services.payout_service import create_teacher_earning
+from app.config import settings
 
 router = APIRouter()
+
+AGORA_ROLE_PUBLISHER = 1
+
+
+def _generate_agora_token(channel: str, uid: int) -> str:
+    """Generate Agora RTC token valid for 2 hours."""
+    from agora_token_builder import RtcTokenBuilder
+    expire_ts = int(time_module.time()) + 7200  # 2 hours
+    return RtcTokenBuilder.buildTokenWithUid(
+        settings.AGORA_APP_ID,
+        settings.AGORA_APP_CERTIFICATE,
+        channel,
+        uid,
+        AGORA_ROLE_PUBLISHER,
+        expire_ts,
+    )
 
 
 @router.get("/rate")
@@ -54,6 +72,42 @@ def list_my_sessions(
         .filter(VideoCallSession.teacher_id == teacher.id)
         .order_by(VideoCallSession.scheduled_at.desc())
         .all()
+    )
+
+
+@router.post("/sessions/{session_id}/join", response_model=JoinSessionResponse)
+def join_session(
+    session_id: int,
+    teacher: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Get Agora token to join. Only allowed within 10 minutes before scheduled start."""
+    sess = db.query(VideoCallSession).filter(
+        VideoCallSession.id == session_id,
+        VideoCallSession.teacher_id == teacher.id,
+    ).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    if sess.status not in (SessionStatus.BOOKED.value, SessionStatus.IN_PROGRESS.value):
+        raise HTTPException(status_code=400, detail="Session is not joinable.")
+
+    now = datetime.now(timezone.utc)
+    scheduled = sess.scheduled_at.replace(tzinfo=timezone.utc) if sess.scheduled_at.tzinfo is None else sess.scheduled_at
+    if now < scheduled - timedelta(minutes=10):
+        raise HTTPException(status_code=400, detail="Too early to join. Join within 10 minutes of the session.")
+
+    # Mark in-progress on first join
+    if sess.status == SessionStatus.BOOKED.value:
+        sess.status = SessionStatus.IN_PROGRESS.value
+        sess.started_at = now
+        db.commit()
+        db.refresh(sess)
+
+    agora_token = _generate_agora_token(sess.agora_channel_name, teacher.id)
+    return JoinSessionResponse(
+        agora_channel_name=sess.agora_channel_name,
+        agora_token=agora_token,
     )
 
 

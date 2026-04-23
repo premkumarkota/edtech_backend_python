@@ -1,5 +1,9 @@
+import os
 from pydantic_settings import BaseSettings
 from typing import Optional
+
+# Load .env.dev locally; in production (Cloud Run) env vars are injected directly
+_env_file = ".env.dev" if os.path.exists(".env.dev") else None
 
 
 class Settings(BaseSettings):
@@ -26,13 +30,17 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""
 
+    # Agora RTC
+    AGORA_APP_ID: str = ""
+    AGORA_APP_CERTIFICATE: str = ""
+
     # App
     DEBUG: bool = True
 
 
     class Config:
         case_sensitive = False
-        env_file = ".env"
+        env_file = _env_file
         extra = "allow"
 
 

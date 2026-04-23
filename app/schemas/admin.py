@@ -106,9 +106,9 @@ class UserStatsResponse(BaseModel):
     onboarded_teachers: int
 
 
-# ========== TEACHER PENDING APPROVAL ==========
+# ========== TEACHER VERIFICATION / DETAIL ==========
 
-class TeacherPendingResponse(BaseModel):
+class TeacherVerificationResponse(BaseModel):
     """
     Teacher shown in admin pending-approvals list.
     Full rich profile so admin can make an informed decision before approving.
@@ -134,6 +134,7 @@ class TeacherPendingResponse(BaseModel):
     subjects: Optional[List[str]] = None
     languages: Optional[List[str]] = None
     achievements: Optional[str] = None
+    rejection_reason: Optional[str] = None
 
     # Rate negotiation
     proposed_rate_per_hour: Optional[float] = None     # what the teacher asked for
@@ -141,6 +142,10 @@ class TeacherPendingResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# Backward-compatible name used by the existing pending endpoint.
+TeacherPendingResponse = TeacherVerificationResponse
 
 
 # ========== PLATFORM CONFIG ==========
