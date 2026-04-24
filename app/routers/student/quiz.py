@@ -180,6 +180,12 @@ def submit_quiz(
     attempt.time_taken_secs = time_taken_secs
 
     db.commit()
+    
+    # Update total points in profile
+    if student.student_profile:
+        student.student_profile.total_points += score
+        db.commit()
+        
     return {"score": score, "total": total, "passed": attempt.passed}
 
 @router.get("/attempt/{attempt_id}/result")
@@ -221,3 +227,25 @@ def get_leaderboard(quiz_id: int, db: Session = Depends(get_db), student: User =
         user_id=u.id, name=u.name or "Student", profile_image_url=u.profile_image_url,
         score=s, time_taken_secs=t, rank=i, percentage=(s/50*100) # Mock percentage calculation
     ) for i, (u, s, t) in enumerate(results, 1)]
+
+
+@router.get("/leaderboard/global", response_model=List[GlobalRankEntry])
+def get_global_rankings(db: Session = Depends(get_db), student: User = Depends(require_student)):
+    """Global top 50 ranking based on total points."""
+    from app.models.student_profile import StudentProfile
+    
+    # Efficiently fetch top 50 students with points > 0
+    rankings = db.query(User, StudentProfile.total_points)\
+        .join(StudentProfile, User.id == StudentProfile.user_id)\
+        .filter(StudentProfile.total_points > 0)\
+        .order_by(StudentProfile.total_points.desc())\
+        .limit(50)\
+        .all()
+
+    return [GlobalRankEntry(
+        user_id=u.id, 
+        name=u.name or "Student", 
+        profile_image_url=u.profile_image_url,
+        total_points=p, 
+        rank=i
+    ) for i, (u, p) in enumerate(rankings, 1)]

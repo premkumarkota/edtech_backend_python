@@ -110,3 +110,14 @@ class LeaderboardEntry(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class GlobalRankEntry(BaseModel):
+    user_id: int
+    name: str
+    profile_image_url: Optional[str] = None
+    total_points: int
+    rank: int
+
+    class Config:
+        from_attributes = True

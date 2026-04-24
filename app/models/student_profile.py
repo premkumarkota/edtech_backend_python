@@ -18,6 +18,7 @@ class StudentProfile(Base):
     age            = Column(Integer, nullable=True)
     school_college = Column(String(200), nullable=True)
     location       = Column(String(200), nullable=True)
+    total_points   = Column(Integer, default=0)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

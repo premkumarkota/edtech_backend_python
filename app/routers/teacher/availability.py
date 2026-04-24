@@ -156,6 +156,26 @@ def unblock_date(
     return {"message": f"{blocked_date} unblocked."}
 
 
+@router.get("/block-date", response_model=List[date_type])
+def get_blocked_dates(
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Return all upcoming blocked dates for the teacher."""
+    today = date_type.today()
+    overrides = (
+        db.query(TeacherAvailabilityOverride)
+        .filter(
+            TeacherAvailabilityOverride.teacher_id == current_user.id,
+            TeacherAvailabilityOverride.is_blocked == True,
+            TeacherAvailabilityOverride.date >= today,
+        )
+        .order_by(TeacherAvailabilityOverride.date)
+        .all()
+    )
+    return [o.date for o in overrides]
+
+
 # ── FCM token ─────────────────────────────────────────────────────────────────
 
 @router.put("/fcm-token")
