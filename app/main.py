@@ -50,6 +50,7 @@ from app.routers.teacher import auth as teacher_auth
 from app.routers.teacher import home as teacher_home
 from app.routers.teacher import sessions as teacher_sessions
 from app.routers.payments import router as payments_webhook
+from app.services.reminder_scheduler import start_scheduler, stop_scheduler
 
 
 # ── Lifespan (startup / shutdown) ────────────────────────────────────────────
@@ -60,7 +61,10 @@ async def lifespan(app: FastAPI):
         print("INFO: Database tables created/verified successfully.")
     except Exception as e:
         print(f"WARNING: DB error on startup: {e}")
+
+    start_scheduler()
     yield
+    stop_scheduler()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────

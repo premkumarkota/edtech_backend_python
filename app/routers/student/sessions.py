@@ -57,9 +57,13 @@ def _check_teacher_availability(
       1. Date is not blocked (day off)
       2. scheduled_at falls inside a weekly availability block
       3. No existing BOOKED/IN_PROGRESS session overlaps this slot
+
+    NOTE: Availability times are stored in IST (India Standard Time, UTC+5:30).
+    All comparisons are done in IST regardless of how the client sends the datetime.
     """
-    local_date = scheduled_at.astimezone(timezone.utc).date()
-    local_time = scheduled_at.astimezone(timezone.utc).time()
+    IST = timezone(timedelta(hours=5, minutes=30))
+    local_date = scheduled_at.astimezone(IST).date()
+    local_time = scheduled_at.astimezone(IST).time()
     slot_end_time = (
         datetime.combine(local_date, local_time) + timedelta(minutes=duration_mins)
     ).time()

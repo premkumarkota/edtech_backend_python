@@ -144,6 +144,21 @@ def notify_teacher_rejected(
     )
 
 
+def notify_student_subscription_activated(
+    fcm_token: str,
+    student_name: str,
+    plan_name: str,
+    expires_at: str,
+    video_minutes: int,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="🎉 Subscription Activated!",
+        body=f"Welcome, {student_name}! Your {plan_name} plan is now active. {video_minutes} video call minutes unlocked. Valid till {expires_at}.",
+        data={"type": "subscription_activated"},
+    )
+
+
 def notify_session_reminder(
     fcm_token: str,
     other_party_name: str,
@@ -151,7 +166,7 @@ def notify_session_reminder(
 ) -> bool:
     return send_push(
         fcm_token=fcm_token,
-        title="Session Starting Soon",
-        body=f"Your session with {other_party_name} starts in 15 minutes",
-        data={"type": "session_reminder", "session_id": session_id},
+        title="⏰ Session Starting Soon",
+        body=f"Your session with {other_party_name} starts in 15 minutes. Get ready!",
+        data={"type": "session_reminder", "session_id": str(session_id)},
     )

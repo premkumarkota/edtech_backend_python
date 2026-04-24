@@ -12,6 +12,8 @@ from fastapi import HTTPException, status
 
 from app.models.subscription import StudentSubscription, SubscriptionStatus, SubscriptionPlan
 from app.models.payment import RazorpayPayment
+from app.models.user import User
+from app.utils.fcm import notify_student_subscription_activated
 
 
 def get_active_subscription(student_id: int, db: Session) -> Optional[StudentSubscription]:
@@ -77,6 +79,22 @@ def activate_subscription(
 
     db.commit()
     db.refresh(sub)
+
+    # Send push notification to student — fire-and-forget, never block activation
+    try:
+        student = db.query(User).filter(User.id == sub.student_id).first()
+        if student and student.fcm_token:
+            expires_str = sub.expires_at.strftime("%-d %b %Y") if sub.expires_at else "—"
+            notify_student_subscription_activated(
+                fcm_token=student.fcm_token,
+                student_name=student.name or "there",
+                plan_name=plan.name,
+                expires_at=expires_str,
+                video_minutes=sub.video_call_minutes_total,
+            )
+    except Exception:
+        pass  # Never let notification failure break activation
+
     return sub
 
 

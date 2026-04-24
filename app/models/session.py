@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -47,6 +47,9 @@ class VideoCallSession(Base):
     # Duration (actual is source of billing truth)
     scheduled_duration_mins = Column(Integer, nullable=False, default=30)
     actual_duration_mins    = Column(Integer, nullable=True)   # Set when session ends
+
+    # Reminder flag — prevents duplicate 15-min notifications
+    reminder_sent = Column(Boolean, default=False, nullable=False, server_default="false")
 
     # Cancellation info
     cancelled_by  = Column(Integer, ForeignKey("users.id"), nullable=True)
