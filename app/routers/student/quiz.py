@@ -10,7 +10,7 @@ from app.models.user import User
 from app.models.quiz import Quiz, QuizQuestion, QuizAttempt, QuizAnswer, QuizStatus, AttemptStatus
 from app.schemas.quiz import (
     QuizResponse, QuizQuestionResponse, QuizAttemptResponse,
-    QuizSubmit, QuizResultResponse, LeaderboardEntry
+    QuizSubmit, QuizResultResponse, LeaderboardEntry, GlobalRankEntry
 )
 
 router = APIRouter()
