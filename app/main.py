@@ -27,6 +27,7 @@ from app.routers.admin import teachers as admin_teachers
 from app.routers.admin import syllabus as admin_syllabus
 from app.routers.admin import quiz as admin_quiz
 from app.routers.admin import plans as admin_plans
+from app.routers.admin import subscriptions as admin_subscriptions
 from app.routers.admin import payouts as admin_payouts
 from app.routers.admin import config as admin_config
 from app.routers.admin import stats as admin_stats
@@ -127,6 +128,9 @@ app.include_router(admin_quiz.router,
 
 app.include_router(admin_plans.router,
                    prefix="/api/admin/plans",
+                   tags=["admin-plans"])
+app.include_router(admin_subscriptions.router,
+                   prefix="/api/admin/subscriptions",
                    tags=["Admin - Subscription Plans"])
 
 app.include_router(admin_payouts.router,
