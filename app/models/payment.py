@@ -1,5 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -28,7 +27,7 @@ class RazorpayPayment(Base):
     status     = Column(String(30), nullable=False, default="created")  # created / captured / failed
 
     # Full raw Razorpay webhook payload stored for audit
-    gateway_response = Column(JSONB, nullable=True)
+    gateway_response = Column(JSON, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

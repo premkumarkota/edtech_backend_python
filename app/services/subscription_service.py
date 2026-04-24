@@ -6,6 +6,7 @@ Core business logic for subscription lifecycle:
   - Check entitlement gates (mock test, video call)
 """
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
@@ -13,7 +14,7 @@ from app.models.subscription import StudentSubscription, SubscriptionStatus, Sub
 from app.models.payment import RazorpayPayment
 
 
-def get_active_subscription(student_id: int, db: Session) -> StudentSubscription | None:
+def get_active_subscription(student_id: int, db: Session) -> Optional[StudentSubscription]:
     """Return the student's current active, non-expired subscription, or None."""
     return db.query(StudentSubscription).filter(
         StudentSubscription.student_id == student_id,
@@ -26,7 +27,7 @@ def activate_subscription(
     subscription_id: int,
     payment_id: str,
     db: Session,
-) -> StudentSubscription | None:
+) -> Optional[StudentSubscription]:
     """
     Activate a pending subscription after payment is confirmed.
 

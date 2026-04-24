@@ -7,6 +7,7 @@ Source of truth for payment status.
 Always returns 200 to Razorpay (non-200 causes infinite retries).
 """
 import json
+from typing import Optional, Union
 from fastapi import APIRouter, Request, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -108,7 +109,7 @@ async def razorpay_webhook(
 
 def _log_webhook_event(
     order_id: str,
-    payment_id: str | None,
+    payment_id: Optional[str],
     event_type: str,
     payload: dict,
     db: Session,
