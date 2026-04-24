@@ -5,6 +5,7 @@ from app.database import get_db
 from app.dependencies import get_current_admin
 from app.models.user import User, UserRole
 from app.schemas.admin import StudentListItem, TeacherListItem, UserStatsResponse
+import firebase_admin.auth as firebase_auth
 
 
 router = APIRouter()
@@ -80,6 +81,43 @@ def toggle_student_active(
     db.commit()
     db.refresh(user)
     return {"message": f"Student {'activated' if user.is_active else 'deactivated'}", "is_active": user.is_active}
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_200_OK)
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """
+    Permanently delete a user account (student or teacher) and revoke
+    their Firebase credentials.  Admins cannot delete themselves.
+    Required by Google Play Store data-deletion policy.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role == UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin accounts cannot be deleted via this endpoint"
+        )
+    if user.id == admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot delete your own account"
+        )
+
+    # Revoke Firebase credentials so the user cannot log in again
+    if user.firebase_uid:
+        try:
+            firebase_auth.delete_user(user.firebase_uid)
+        except Exception:
+            pass  # Non-critical — proceed with DB deletion regardless
+
+    db.delete(user)
+    db.commit()
+    return {"message": f"User {user_id} permanently deleted"}
 
 
 @router.patch("/teachers/{user_id}/toggle-active")
