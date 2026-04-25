@@ -47,6 +47,7 @@ class SessionResponse(BaseModel):
 
 class JoinSessionResponse(BaseModel):
     session_id: int
+    agora_app_id: str
     agora_channel_name: str
     agora_token: str
     uid: int

@@ -301,6 +301,7 @@ def join_session(
     agora_token = _generate_agora_token(sess.agora_channel_name, teacher.id)
     return JoinSessionResponse(
         session_id=sess.id,
+        agora_app_id=settings.AGORA_APP_ID,
         agora_channel_name=sess.agora_channel_name,
         agora_token=agora_token,
         uid=teacher.id,
