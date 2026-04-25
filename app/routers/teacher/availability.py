@@ -7,7 +7,7 @@ POST   /api/teacher/availability/block-date → block a specific date (day off)
 DELETE /api/teacher/availability/block-date/{date} → unblock a date
 PUT    /api/teacher/fcm-token             → save device push token
 """
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timezone, timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,17 +16,37 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_teacher
 from app.models.user import User
+from app.models.teacher_profile import TeacherProfile, TeacherStatus
+from app.models.session import VideoCallSession, SessionStatus
 from app.models.availability import TeacherAvailability, TeacherAvailabilityOverride
 from app.schemas.availability import (
     AvailabilityCreateRequest,
     AvailabilityResponse,
     BlockDateRequest,
     FcmTokenRequest,
+    InstantAvailabilityRequest,
+    InstantAvailabilityResponse,
 )
 
 router = APIRouter()
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def _instant_availability_payload(profile: TeacherProfile, teacher_id: int) -> dict:
+    now = datetime.now(timezone.utc)
+    is_live = bool(
+        profile.is_available_now
+        and profile.available_now_expires_at
+        and profile.available_now_expires_at > now
+    )
+    return {
+        "teacher_id": teacher_id,
+        "is_available_now": is_live,
+        "available_now_started_at": profile.available_now_started_at if is_live else None,
+        "available_now_expires_at": profile.available_now_expires_at if is_live else None,
+        "last_seen_at": profile.last_seen_at,
+    }
 
 
 # ── Weekly schedule ───────────────────────────────────────────────────────────
@@ -108,6 +128,64 @@ def remove_availability_block(
         raise HTTPException(status_code=404, detail="Availability block not found.")
     block.is_active = False
     db.commit()
+
+
+# ── Instant availability ─────────────────────────────────────────────────────
+
+@router.get("/instant", response_model=InstantAvailabilityResponse)
+def get_instant_availability(
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    profile = db.query(TeacherProfile).filter(
+        TeacherProfile.user_id == current_user.id,
+    ).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Teacher profile not found.")
+
+    payload = _instant_availability_payload(profile, current_user.id)
+    if profile.is_available_now and not payload["is_available_now"]:
+        profile.is_available_now = False
+        db.commit()
+    return payload
+
+
+@router.put("/instant", response_model=InstantAvailabilityResponse)
+def update_instant_availability(
+    payload: InstantAvailabilityRequest,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    profile = db.query(TeacherProfile).filter(
+        TeacherProfile.user_id == current_user.id,
+    ).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Teacher profile not found.")
+
+    if profile.status != TeacherStatus.APPROVED:
+        raise HTTPException(status_code=403, detail="Only approved teachers can go available now.")
+
+    now = datetime.now(timezone.utc)
+    active_session = db.query(VideoCallSession).filter(
+        VideoCallSession.teacher_id == current_user.id,
+        VideoCallSession.status == SessionStatus.IN_PROGRESS.value,
+    ).first()
+    if payload.is_available_now and active_session:
+        raise HTTPException(status_code=400, detail="You are already in an active session.")
+
+    profile.last_seen_at = now
+    if payload.is_available_now:
+        profile.is_available_now = True
+        profile.available_now_started_at = now
+        profile.available_now_expires_at = now + timedelta(minutes=payload.expires_in_mins)
+    else:
+        profile.is_available_now = False
+        profile.available_now_started_at = None
+        profile.available_now_expires_at = None
+
+    db.commit()
+    db.refresh(profile)
+    return _instant_availability_payload(profile, current_user.id)
 
 
 # ── Date overrides (block a day off) ─────────────────────────────────────────

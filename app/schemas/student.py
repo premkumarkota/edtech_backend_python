@@ -79,6 +79,7 @@ class TeacherCardResponse(BaseModel):
     rate_per_hour: Optional[float] = None
     subjects: Optional[list] = None
     languages: Optional[list] = None
+    is_available_now: bool = False
 
     class Config:
         from_attributes = True
@@ -107,6 +108,7 @@ class TeacherDetailResponse(BaseModel):
     subjects: Optional[list] = None
     languages: Optional[list] = None
     achievements: Optional[str] = None
+    is_available_now: bool = False
 
     class Config:
         from_attributes = True

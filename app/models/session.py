@@ -54,6 +54,12 @@ class VideoCallSession(Base):
     # Cancellation info
     cancelled_by  = Column(Integer, ForeignKey("users.id"), nullable=True)
     cancel_reason = Column(Text, nullable=True)
+    cancelled_at  = Column(DateTime(timezone=True), nullable=True)
+    is_late_cancel = Column(Boolean, default=False, nullable=False, server_default="false")
+    penalty_minutes = Column(Integer, nullable=False, default=0, server_default="0")
+    refund_minutes = Column(Integer, nullable=False, default=0, server_default="0")
+    no_show_marked_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    no_show_reason = Column(Text, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -63,6 +69,18 @@ class VideoCallSession(Base):
     teacher      = relationship("User", foreign_keys=[teacher_id])
     subscription = relationship("StudentSubscription", back_populates="sessions")
     earning      = relationship("TeacherEarning", back_populates="session", uselist=False)
+
+    @property
+    def duration_mins(self) -> int:
+        return self.scheduled_duration_mins
+
+    @property
+    def student_name(self) -> str | None:
+        return self.student.name if self.student else None
+
+    @property
+    def teacher_name(self) -> str | None:
+        return self.teacher.name if self.teacher else None
 
     def __repr__(self):
         return f"<VideoCallSession(id={self.id}, student={self.student_id}, teacher={self.teacher_id}, status={self.status})>"

@@ -17,6 +17,7 @@ from app.models import (  # noqa: F401
     Syllabus,
     Quiz, QuizQuestion, QuizAttempt, QuizAnswer,
     TeacherAvailability, TeacherAvailabilityOverride,
+    InstantSessionRequest, InstantSessionRequestStatus,
 )
 
 # ── Routers ──────────────────────────────────────────────────────────────────
@@ -31,6 +32,7 @@ from app.routers.admin import subscriptions as admin_subscriptions
 from app.routers.admin import payouts as admin_payouts
 from app.routers.admin import config as admin_config
 from app.routers.admin import stats as admin_stats
+from app.routers.admin import sessions as admin_sessions
 
 from app.routers.common import categories as common_categories
 
@@ -148,6 +150,10 @@ app.include_router(admin_config.router,
 app.include_router(admin_stats.router,
                    prefix="/api/admin/stats",
                    tags=["Admin - Dashboard Stats"])
+
+app.include_router(admin_sessions.router,
+                   prefix="/api/admin/sessions",
+                   tags=["Admin - Session Monitoring"])
 
 
 # ═══════════════════════════════════════════════════════════════

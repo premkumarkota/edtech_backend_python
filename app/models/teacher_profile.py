@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, Text, Numeric, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, Text, Numeric, DateTime, ForeignKey, Enum, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -64,6 +64,12 @@ class TeacherProfile(Base):
     reviewed_by      = Column(Integer, ForeignKey("users.id"), nullable=True)
     reviewed_at      = Column(DateTime(timezone=True), nullable=True)
     rejection_reason = Column(Text, nullable=True)
+
+    # ── Instant sessions ─────────────────────────────────────────────────────
+    is_available_now = Column(Boolean, default=False, nullable=False, server_default="false")
+    available_now_started_at = Column(DateTime(timezone=True), nullable=True)
+    available_now_expires_at = Column(DateTime(timezone=True), nullable=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -170,3 +170,62 @@ def notify_session_reminder(
         body=f"Your session with {other_party_name} starts in 15 minutes. Get ready!",
         data={"type": "session_reminder", "session_id": str(session_id)},
     )
+
+
+def notify_teacher_instant_session_request(
+    fcm_token: str,
+    student_name: str,
+    duration_mins: int,
+    request_id: int,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Instant Session Request",
+        body=f"{student_name} wants a {duration_mins}-min session now.",
+        data={"type": "instant_session_request", "request_id": request_id},
+    )
+
+
+def notify_student_instant_session_accepted(
+    fcm_token: str,
+    teacher_name: str,
+    request_id: int,
+    session_id: int,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Instant Session Accepted",
+        body=f"{teacher_name} accepted your instant session request. You can join now.",
+        data={
+            "type": "instant_session_accepted",
+            "request_id": request_id,
+            "session_id": session_id,
+        },
+    )
+
+
+def notify_student_instant_session_declined(
+    fcm_token: str,
+    teacher_name: str,
+    request_id: int,
+    reason: str,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Instant Session Declined",
+        body=f"{teacher_name} declined your request. {reason}",
+        data={"type": "instant_session_declined", "request_id": request_id},
+    )
+
+
+def notify_student_instant_session_expired(
+    fcm_token: str,
+    teacher_name: str,
+    request_id: int,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Instant Session Expired",
+        body=f"{teacher_name} did not respond in time. Please try another tutor.",
+        data={"type": "instant_session_expired", "request_id": request_id},
+    )

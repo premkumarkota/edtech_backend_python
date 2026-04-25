@@ -23,6 +23,17 @@ from app.models.category import Category
 router = APIRouter()
 
 
+def _is_available_now(profile: TeacherProfile) -> bool:
+    if not profile.is_available_now or not profile.available_now_expires_at:
+        return False
+    expires_at = (
+        profile.available_now_expires_at.replace(tzinfo=timezone.utc)
+        if profile.available_now_expires_at.tzinfo is None
+        else profile.available_now_expires_at
+    )
+    return expires_at > datetime.now(timezone.utc)
+
+
 @router.get("")
 def teacher_home(
     teacher: User = Depends(get_current_teacher),
@@ -112,6 +123,7 @@ def teacher_home(
         VideoCallSession.teacher_id == teacher.id,
         VideoCallSession.status == SessionStatus.COMPLETED.value,
     ).scalar() or 0
+    is_available_now = _is_available_now(profile)
 
     return {
         "status": "approved",
@@ -145,6 +157,11 @@ def teacher_home(
             "pending_earnings": float(pending_earnings),
             "pending_earnings_display": f"₹{pending_earnings}",
         },
+        "upcoming_sessions": upcoming_count,
+        "completed_sessions": completed_count,
+        "pending_earnings": float(pending_earnings),
+        "is_available_now": is_available_now,
+        "available_now_expires_at": profile.available_now_expires_at if is_available_now else None,
 
         "approved_at": profile.reviewed_at,
         "message": "Your profile is live. Students can now book sessions with you!",

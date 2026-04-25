@@ -23,6 +23,17 @@ def _get_rate(teacher_id: int, rate_map: dict) -> float:
     return rate_map.get(teacher_id, 0.00)
 
 
+def _is_available_now(profile: TeacherProfile | None) -> bool:
+    if not profile or not profile.is_available_now or not profile.available_now_expires_at:
+        return False
+    expires_at = (
+        profile.available_now_expires_at.replace(tzinfo=timezone.utc)
+        if profile.available_now_expires_at.tzinfo is None
+        else profile.available_now_expires_at
+    )
+    return expires_at > datetime.now(timezone.utc)
+
+
 @router.get("/teachers", response_model=HomeFeedResponse)
 def get_home_feed(
     db: Session = Depends(get_db),
@@ -81,6 +92,7 @@ def get_home_feed(
             rate_per_hour=_get_rate(t.id, rate_map),
             subjects=t.teacher_profile.subjects if t.teacher_profile else [],
             languages=t.teacher_profile.languages if t.teacher_profile else [],
+            is_available_now=_is_available_now(t.teacher_profile),
         )
         for t in teachers
     ]
@@ -143,6 +155,7 @@ def get_teacher_detail(
         subjects=profile.subjects if profile else [],
         languages=profile.languages if profile else [],
         achievements=profile.achievements if profile else None,
+        is_available_now=_is_available_now(profile),
     )
 
 
@@ -231,6 +244,63 @@ def get_teacher_slots(
             slot_start = slot_end
 
     return TeacherSlotsResponse(teacher_id=teacher_id, date=date, slots=slots)
+
+
+@router.get("/teachers/{teacher_id}/available-dates")
+def get_teacher_available_dates(
+    teacher_id: int,
+    days: int = 14,
+    db: Session = Depends(get_db),
+    student: User = Depends(get_current_student),
+):
+    """
+    Returns dates (ISO strings) within the next `days` days where the teacher
+    has at least one active availability block and no blocked-day override.
+    Used by the student app to highlight bookable dates in the date carousel.
+    """
+    teacher = db.query(User).filter(
+        User.id == teacher_id,
+        User.role == UserRole.TEACHER,
+        User.is_active == True,
+    ).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found.")
+
+    profile = db.query(TeacherProfile).filter(
+        TeacherProfile.user_id == teacher_id,
+        TeacherProfile.status == TeacherStatus.APPROVED,
+    ).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Teacher not available.")
+
+    # Which weekdays does this teacher work?
+    active_blocks = db.query(TeacherAvailability).filter(
+        TeacherAvailability.teacher_id == teacher_id,
+        TeacherAvailability.is_active == True,
+    ).all()
+    if not active_blocks:
+        return {"teacher_id": teacher_id, "available_dates": []}
+
+    working_weekdays = {b.day_of_week for b in active_blocks}  # set of 0-6
+
+    # Dates the teacher has blocked in this window
+    today = date_type.today()
+    end_date = today + timedelta(days=days - 1)
+    blocked_overrides = db.query(TeacherAvailabilityOverride).filter(
+        TeacherAvailabilityOverride.teacher_id == teacher_id,
+        TeacherAvailabilityOverride.date >= today,
+        TeacherAvailabilityOverride.date <= end_date,
+        TeacherAvailabilityOverride.is_blocked == True,
+    ).all()
+    blocked_dates = {o.date for o in blocked_overrides}
+
+    available_dates = []
+    for i in range(days):
+        check_date = today + timedelta(days=i)
+        if check_date not in blocked_dates and check_date.weekday() in working_weekdays:
+            available_dates.append(str(check_date))
+
+    return {"teacher_id": teacher_id, "available_dates": available_dates}
 
 
 @router.put("/fcm-token")

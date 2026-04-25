@@ -1,7 +1,7 @@
 """
 Schemas for teacher availability and student slot viewing.
 """
-from datetime import time, date
+from datetime import time, date, datetime
 from typing import List, Optional
 from pydantic import BaseModel, field_validator
 
@@ -74,3 +74,25 @@ class TeacherSlotsResponse(BaseModel):
 
 class FcmTokenRequest(BaseModel):
     fcm_token: str
+
+
+# ── Teacher: instant availability ────────────────────────────────────────────
+
+class InstantAvailabilityRequest(BaseModel):
+    is_available_now: bool
+    expires_in_mins: int = 120
+
+    @field_validator("expires_in_mins")
+    @classmethod
+    def validate_expiry(cls, v: int) -> int:
+        if v < 15 or v > 480:
+            raise ValueError("expires_in_mins must be between 15 and 480")
+        return v
+
+
+class InstantAvailabilityResponse(BaseModel):
+    teacher_id: int
+    is_available_now: bool
+    available_now_started_at: Optional[datetime] = None
+    available_now_expires_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None

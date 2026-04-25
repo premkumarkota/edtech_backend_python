@@ -21,6 +21,9 @@ from app.models.payout import (                                # Depends on User
     TeacherRate, TeacherEarning, PayoutBatch, TeacherPayout
 )
 from app.models.session import VideoCallSession, SessionStatus  # Depends on User, StudentSubscription
+from app.models.instant_session import (                        # Depends on User, StudentSubscription, VideoCallSession
+    InstantSessionRequest, InstantSessionRequestStatus
+)
 from app.models.availability import (                          # Depends on User
     TeacherAvailability, TeacherAvailabilityOverride
 )
@@ -41,5 +44,6 @@ __all__ = [
     "RazorpayPayment",
     "TeacherRate", "TeacherEarning", "PayoutBatch", "TeacherPayout",
     "VideoCallSession", "SessionStatus",
+    "InstantSessionRequest", "InstantSessionRequestStatus",
     "TeacherAvailability", "TeacherAvailabilityOverride",
 ]
