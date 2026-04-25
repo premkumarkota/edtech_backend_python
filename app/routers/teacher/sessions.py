@@ -31,6 +31,7 @@ from app.schemas.payout import TeacherEarningItem, TeacherEarningSummary
 from app.services.payout_service import create_teacher_earning
 from app.utils.fcm import (
     notify_student_session_cancelled,
+    notify_student_incoming_call,
     notify_student_instant_session_accepted,
     notify_student_instant_session_declined,
     notify_student_instant_session_expired,
@@ -296,6 +297,14 @@ def join_session(
         sess.started_at = now
         db.commit()
         db.refresh(sess)
+
+        student = db.query(User).filter(User.id == sess.student_id).first()
+        if student and student.fcm_token:
+            notify_student_incoming_call(
+                fcm_token=student.fcm_token,
+                teacher_name=teacher.name or "Your tutor",
+                session_id=sess.id,
+            )
 
     agora_token = _generate_agora_token(sess.agora_channel_name, teacher.id)
     return JoinSessionResponse(

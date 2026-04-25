@@ -29,6 +29,7 @@ from app.utils.fcm import (
     notify_teacher_session_booked,
     notify_teacher_session_cancelled,
     notify_teacher_instant_session_request,
+    notify_teacher_incoming_call,
 )
 from app.config import settings
 
@@ -417,6 +418,20 @@ def join_session(
             status_code=400,
             detail=f"Too early to join. Session starts at {scheduled.isoformat()}.",
         )
+
+    if sess.status == SessionStatus.BOOKED.value:
+        sess.status = SessionStatus.IN_PROGRESS.value
+        sess.started_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(sess)
+
+        teacher = db.query(User).filter(User.id == sess.teacher_id).first()
+        if teacher and teacher.fcm_token:
+            notify_teacher_incoming_call(
+                fcm_token=teacher.fcm_token,
+                student_name=student.name or "A student",
+                session_id=sess.id,
+            )
 
     agora_token = _generate_agora_token(sess.agora_channel_name, student.id)
     return JoinSessionResponse(

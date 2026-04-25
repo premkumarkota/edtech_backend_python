@@ -172,6 +172,42 @@ def notify_session_reminder(
     )
 
 
+def notify_teacher_incoming_call(
+    fcm_token: str,
+    student_name: str,
+    session_id: int,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Incoming Session Call",
+        body=f"{student_name} is calling for your live session.",
+        data={
+            "type": "session_incoming_call",
+            "session_id": session_id,
+            "caller_name": student_name,
+            "caller_role": "student",
+        },
+    )
+
+
+def notify_student_incoming_call(
+    fcm_token: str,
+    teacher_name: str,
+    session_id: int,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Incoming Session Call",
+        body=f"{teacher_name} is calling for your live session.",
+        data={
+            "type": "session_incoming_call",
+            "session_id": session_id,
+            "caller_name": teacher_name,
+            "caller_role": "teacher",
+        },
+    )
+
+
 def notify_teacher_instant_session_request(
     fcm_token: str,
     student_name: str,
@@ -182,7 +218,7 @@ def notify_teacher_instant_session_request(
         fcm_token=fcm_token,
         title="Instant Session Request",
         body=f"{student_name} wants a {duration_mins}-min session now.",
-        data={"type": "instant_session_request", "request_id": request_id},
+        data={"type": "instant_request", "request_id": request_id},
     )
 
 
