@@ -162,10 +162,6 @@ def accept_instant_request(
     _expire_stale_instant_requests(db)
     req = (
         db.query(InstantSessionRequest)
-        .options(
-            joinedload(InstantSessionRequest.student),
-            joinedload(InstantSessionRequest.teacher),
-        )
         .filter(
             InstantSessionRequest.id == request_id,
             InstantSessionRequest.teacher_id == teacher.id,
@@ -236,10 +232,6 @@ def decline_instant_request(
     """Decline a pending instant request."""
     req = (
         db.query(InstantSessionRequest)
-        .options(
-            joinedload(InstantSessionRequest.student),
-            joinedload(InstantSessionRequest.teacher),
-        )
         .filter(
             InstantSessionRequest.id == request_id,
             InstantSessionRequest.teacher_id == teacher.id,
