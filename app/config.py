@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     AGORA_APP_ID: str = ""
     AGORA_APP_CERTIFICATE: str = ""
 
-    # App
-    DEBUG: bool = True
+    # App — override with DEBUG=true in .env.dev for local development
+    DEBUG: bool = False
 
 
     class Config:

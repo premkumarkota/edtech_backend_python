@@ -91,11 +91,11 @@ async def upload_file(
 
     storage_path = f"{folder}/{filename}"
 
-    # 5. Upload
-    if settings.DEBUG or not getattr(settings, "GCP_BUCKET_NAME", None):
-        return await _upload_local(contents, storage_path)
-    else:
+    # 5. Upload — use GCS when bucket is configured, local disk for dev only
+    if getattr(settings, "GCP_BUCKET_NAME", None):
         return await _upload_gcp(contents, storage_path, content_type)
+    else:
+        return await _upload_local(contents, storage_path)
 
 
 async def _upload_local(contents: bytes, path: str) -> str:
@@ -113,18 +113,23 @@ async def _upload_local(contents: bytes, path: str) -> str:
 
 
 async def _upload_gcp(contents: bytes, path: str, content_type: str) -> str:
-    """Production: upload to GCP Cloud Storage."""
+    """Production: upload to GCP Cloud Storage using ADC or service account JSON."""
     try:
         from google.cloud import storage as gcs
     except ImportError:
         raise RuntimeError("google-cloud-storage is required: pip install google-cloud-storage")
 
-    client = gcs.Client.from_service_account_json(settings.FIREBASE_SERVICE_ACCOUNT_PATH)
+    # Use service account JSON if provided, otherwise use Application Default Credentials
+    # (Cloud Run automatically provides ADC via the instance's service account)
+    sa_path = getattr(settings, "FIREBASE_SERVICE_ACCOUNT_PATH", None)
+    if sa_path and os.path.exists(sa_path):
+        client = gcs.Client.from_service_account_json(sa_path)
+    else:
+        client = gcs.Client()
+
     bucket = client.bucket(settings.GCP_BUCKET_NAME)
     blob = bucket.blob(path)
-    
     blob.upload_from_string(contents, content_type=content_type)
-    # blob.make_public()  # Removed: Not allowed when Uniform Bucket-Level Access is enabled
     return blob.public_url
 
 
