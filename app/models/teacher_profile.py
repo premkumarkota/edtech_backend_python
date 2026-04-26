@@ -34,6 +34,7 @@ class TeacherProfile(Base):
     bio              = Column(Text, nullable=True)           # About the teacher
     experience_years = Column(Integer, nullable=True)        # Total years (summary)
     document_url     = Column(String(500), nullable=True)    # Verification PDF/image
+    video_url        = Column(String(500), nullable=True)    # Lecture video (≤10 MB)
 
     # ── Rich profile (Practo-style) ───────────────────────────────────────────
     # education: [{ "degree": "B.Tech", "institution": "IIT Delhi", "year_of_passing": 2010 }]

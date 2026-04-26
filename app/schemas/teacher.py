@@ -45,6 +45,7 @@ class TeacherOnboardingRequest(BaseModel):
     languages: Optional[List[str]] = None
 
     achievements: Optional[str] = None
+    video_url: Optional[str] = None
 
 
 class TeacherProfileUpdateRequest(BaseModel):
@@ -80,6 +81,7 @@ class TeacherProfileResponse(BaseModel):
 
     # Verification
     document_url: Optional[str] = None
+    video_url: Optional[str] = None
     is_verified: bool = False              # Legacy field
     status: str = "pending"               # pending / approved / rejected
     rejection_reason: Optional[str] = None

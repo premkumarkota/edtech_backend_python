@@ -125,6 +125,7 @@ class TeacherVerificationResponse(BaseModel):
     # From teacher_profile
     status: str = "pending"
     document_url: Optional[str] = None
+    video_url: Optional[str] = None
     bio: Optional[str] = None
     experience_years: Optional[int] = None
     institution_name: Optional[str] = None

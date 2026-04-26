@@ -11,7 +11,7 @@ from app.schemas.teacher import (
 )
 from app.utils.firebase import verify_firebase_token
 from app.utils.security import create_access_token
-from app.services.storage_service import upload_file, ALLOWED_DOCUMENT_TYPES, generate_signed_url
+from app.services.storage_service import upload_file, ALLOWED_DOCUMENT_TYPES, ALLOWED_VIDEO_TYPES, MAX_VIDEO_SIZE_MB, generate_signed_url
 import uuid
 
 
@@ -34,6 +34,7 @@ def _build_teacher_response(user: User, db: Session) -> dict:
         **user.__dict__,
         "status":           profile.status if profile else "pending",
         "document_url":     profile.document_url if profile else user.document_url,
+        "video_url":        profile.video_url if profile else None,
         "rejection_reason": profile.rejection_reason if profile else None,
         "reviewed_at":      profile.reviewed_at if profile else None,
         "category_name":    category.name if category else None,
@@ -208,6 +209,8 @@ def complete_teacher_onboarding(
         profile.languages = request.languages
     if request.achievements is not None:
         profile.achievements = request.achievements
+    if request.video_url is not None:
+        profile.video_url = request.video_url
 
     db.commit()
     db.refresh(current_user)
@@ -230,6 +233,25 @@ async def upload_teacher_document(
         allowed_types=ALLOWED_DOCUMENT_TYPES
     )
     return {"document_url": file_url}
+
+
+@router.post("/upload-video")
+async def upload_teacher_video(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_teacher),
+):
+    """
+    Optional onboarding step: Teacher uploads a short lecture video (max 10 MB).
+    Returns the URL to include as video_url in the onboarding PATCH request.
+    Accepted formats: MP4, MOV, AVI, MKV, WebM.
+    """
+    file_url = await upload_file(
+        file,
+        folder=f"teachers/videos/{current_user.id}",
+        allowed_types=ALLOWED_VIDEO_TYPES,
+        max_size_mb=MAX_VIDEO_SIZE_MB,
+    )
+    return {"video_url": file_url}
 
 
 @router.get("/profile", response_model=TeacherProfileResponse)

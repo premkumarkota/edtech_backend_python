@@ -28,6 +28,7 @@ def _build_pending_response(teacher: User, db: Session) -> dict:
         "category_name":    category.name if category else None,
         "status":           profile.status if profile else "pending",
         "document_url":     profile.document_url if profile else teacher.document_url,
+        "video_url":        profile.video_url if profile else None,
         "bio":              profile.bio if profile else None,
         "experience_years": profile.experience_years if profile else None,
         "institution_name": profile.institution_name if profile else None,

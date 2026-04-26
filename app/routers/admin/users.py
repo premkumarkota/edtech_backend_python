@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import List
 from app.database import get_db
 from app.dependencies import get_current_admin
@@ -115,8 +116,33 @@ def delete_user(
         except Exception:
             pass  # Non-critical — proceed with DB deletion regardless
 
-    db.delete(user)
-    db.commit()
+    # ── Clean up related records before deleting ──────────────────────────────
+    # Nullify nullable FK references so they don't block deletion
+    db.execute(text("UPDATE video_call_sessions SET cancelled_by = NULL WHERE cancelled_by = :uid"), {"uid": user_id})
+    db.execute(text("UPDATE video_call_sessions SET no_show_marked_by = NULL WHERE no_show_marked_by = :uid"), {"uid": user_id})
+    db.execute(text("UPDATE teacher_rates SET set_by_admin_id = NULL WHERE set_by_admin_id = :uid"), {"uid": user_id})
+    db.execute(text("UPDATE quizzes SET created_by = NULL WHERE created_by = :uid"), {"uid": user_id})
+    db.execute(text("UPDATE platform_config SET updated_by = NULL WHERE updated_by = :uid"), {"uid": user_id})
+    db.execute(text("UPDATE teacher_profiles SET reviewed_by = NULL WHERE reviewed_by = :uid"), {"uid": user_id})
+
+    # Delete non-nullable FK records (sessions, payouts, quiz activity, etc.)
+    db.execute(text("DELETE FROM quiz_answers WHERE attempt_id IN (SELECT id FROM quiz_attempts WHERE student_id = :uid)"), {"uid": user_id})
+    db.execute(text("DELETE FROM quiz_attempts WHERE student_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM instant_session_requests WHERE student_id = :uid OR teacher_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM video_call_sessions WHERE student_id = :uid OR teacher_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM teacher_earnings WHERE teacher_id = :uid"), {"uid": user_id})
+    db.execute(text("DELETE FROM teacher_payouts WHERE teacher_id = :uid"), {"uid": user_id})
+    db.execute(text("UPDATE razorpay_payments SET student_id = NULL WHERE student_id = :uid"), {"uid": user_id})
+
+    try:
+        db.delete(user)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete user: {str(e)}"
+        )
     return {"message": f"User {user_id} permanently deleted"}
 
 

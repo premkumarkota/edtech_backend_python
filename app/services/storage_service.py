@@ -36,13 +36,23 @@ ALLOWED_EXCEL_TYPES = {
     "application/octet-stream": "xlsx",  # Some browsers send this for xlsx
 }
 
+ALLOWED_VIDEO_TYPES = {
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
+    "video/x-msvideo": "avi",
+    "video/x-matroska": "mkv",
+    "video/webm": "webm",
+}
+
 MAX_FILE_SIZE_MB = 20
+MAX_VIDEO_SIZE_MB = 10
 
 
 async def upload_file(
     file: UploadFile,
     folder: str,
     allowed_types: dict = None,
+    max_size_mb: float = None,
 ) -> str:
     """
     Upload a file and return its public or signed URL.
@@ -66,10 +76,11 @@ async def upload_file(
 
     # 3. Validate file size
     size_mb = len(contents) / (1024 * 1024)
-    if size_mb > MAX_FILE_SIZE_MB:
+    limit_mb = max_size_mb if max_size_mb is not None else MAX_FILE_SIZE_MB
+    if size_mb > limit_mb:
         raise HTTPException(
             status_code=400,
-            detail=f"File too large ({size_mb:.1f}MB). Max allowed: {MAX_FILE_SIZE_MB}MB"
+            detail=f"File too large ({size_mb:.1f}MB). Max allowed: {limit_mb}MB"
         )
 
     # 4. Generate unique filename
