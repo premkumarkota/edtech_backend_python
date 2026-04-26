@@ -39,8 +39,13 @@ def list_plans(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """List all plans (including inactive) for admin management."""
-    return db.query(SubscriptionPlan).order_by(SubscriptionPlan.created_at.desc()).all()
+    """List active plans for admin management. Deactivated plans are excluded."""
+    return (
+        db.query(SubscriptionPlan)
+        .filter(SubscriptionPlan.is_active == True)
+        .order_by(SubscriptionPlan.created_at.desc())
+        .all()
+    )
 
 
 @router.patch("/{plan_id}", response_model=SubscriptionPlanResponse)

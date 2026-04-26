@@ -67,7 +67,6 @@ def list_subscriptions(
 @router.patch("/{sub_id}/cancel")
 def cancel_subscription(
     sub_id: int,
-    payload: dict,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
