@@ -128,6 +128,13 @@ def delete_user(
         db.execute(text("UPDATE platform_config SET updated_by = NULL WHERE updated_by = :uid"), {"uid": user_id})
         db.execute(text("UPDATE teacher_profiles SET reviewed_by = NULL WHERE reviewed_by = :uid"), {"uid": user_id})
         db.execute(text("UPDATE razorpay_payments SET student_id = NULL WHERE student_id = :uid"), {"uid": user_id})
+        # Nullify subscription_id on payments linked to this student's subscriptions
+        db.execute(text("""
+            UPDATE razorpay_payments SET subscription_id = NULL
+            WHERE subscription_id IN (
+                SELECT id FROM student_subscriptions WHERE student_id = :uid
+            )
+        """), {"uid": user_id})
 
         # Step 3: Delete quiz activity
         db.execute(text("""
