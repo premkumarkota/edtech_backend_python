@@ -63,7 +63,21 @@ async def upload_file(
         allowed_types = {**ALLOWED_DOCUMENT_TYPES, **ALLOWED_EXCEL_TYPES}
 
     # 1. Validate content type
+    # Android often sends 'application/octet-stream' for valid media files —
+    # fall back to extension-based detection in that case.
     content_type = file.content_type or ""
+    if content_type == "application/octet-stream" and file.filename:
+        ext_map = {
+            ".mp4": "video/mp4", ".mov": "video/quicktime",
+            ".avi": "video/x-msvideo", ".mkv": "video/x-matroska",
+            ".webm": "video/webm", ".pdf": "application/pdf",
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".doc": "application/msword",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        _, file_ext = os.path.splitext(file.filename.lower())
+        content_type = ext_map.get(file_ext, content_type)
+
     if content_type not in allowed_types:
         raise HTTPException(
             status_code=400,
