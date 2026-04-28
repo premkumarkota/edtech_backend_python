@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_student
 from app.models.user import User, UserRole
+from app.schemas.common import MessageResponse
 from app.schemas.student import (
     StudentSyncRequest,
     StudentOnboardingRequest,
@@ -189,3 +190,18 @@ def get_student_profile(
         "location": profile.location if profile else None,
         "category_name": category.name if category else None,
     }
+
+
+@router.post("/logout", response_model=MessageResponse)
+def logout_student(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_student),
+):
+    """
+    Best-effort backend logout for student app.
+    Clears server-side push token so the logged-out device stops receiving
+    student push notifications. JWT remains stateless and is removed client-side.
+    """
+    current_user.fcm_token = None
+    db.commit()
+    return {"message": "Logged out successfully", "success": True}

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_teacher
 from app.models.user import User, UserRole
+from app.schemas.common import MessageResponse
 from app.schemas.teacher import (
     TeacherSyncRequest,
     TeacherOnboardingRequest,
@@ -264,3 +265,18 @@ def get_teacher_profile(
     Merges User, TeacherProfile, Category, and TeacherRate tables.
     """
     return _build_teacher_response(current_user, db)
+
+
+@router.post("/logout", response_model=MessageResponse)
+def logout_teacher(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_teacher),
+):
+    """
+    Best-effort backend logout for teacher app.
+    Clears server-side push token so this device stops receiving
+    teacher push notifications after logout.
+    """
+    current_user.fcm_token = None
+    db.commit()
+    return {"message": "Logged out successfully", "success": True}
