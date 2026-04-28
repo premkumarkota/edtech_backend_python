@@ -35,6 +35,7 @@ from app.routers.admin import stats as admin_stats
 from app.routers.admin import sessions as admin_sessions
 
 from app.routers.common import categories as common_categories
+from app.routers.common import legal as common_legal
 
 from app.routers.student import auth as student_auth
 from app.routers.student import home as student_home
@@ -163,6 +164,9 @@ app.include_router(admin_sessions.router,
 app.include_router(common_categories.router,
                    prefix="/api/common/categories",
                    tags=["Common - Categories"])
+
+app.include_router(common_legal.router,
+                   tags=["Public - Legal"])
 
 # ═══════════════════════════════════════════════════════════════
 # STUDENT APP APIs
