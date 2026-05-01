@@ -47,6 +47,10 @@ ALLOWED_VIDEO_TYPES = {
 MAX_FILE_SIZE_MB = 20
 MAX_VIDEO_SIZE_MB = 10
 
+# Admin syllabus chapter materials (larger than generic document upload)
+SYLLABUS_CONTENT_MAX_VIDEO_MB = 100
+SYLLABUS_CONTENT_MAX_DOC_MB = 50
+
 
 async def upload_file(
     file: UploadFile,
@@ -74,6 +78,8 @@ async def upload_file(
             ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
             ".doc": "application/msword",
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".ppt": "application/vnd.ms-powerpoint",
+            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         }
         _, file_ext = os.path.splitext(file.filename.lower())
         content_type = ext_map.get(file_ext, content_type)

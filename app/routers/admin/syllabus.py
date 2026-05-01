@@ -12,7 +12,13 @@ from app.schemas.syllabus import (
     SyllabusSummary, SyllabusDetail, SyllabusCreate,
     ChapterResponse, SyllabusContentResponse, ChapterBase
 )
-from app.services.storage_service import upload_file, ALLOWED_DOCUMENT_TYPES
+from app.services.storage_service import (
+    upload_file,
+    ALLOWED_DOCUMENT_TYPES,
+    ALLOWED_VIDEO_TYPES,
+    SYLLABUS_CONTENT_MAX_DOC_MB,
+    SYLLABUS_CONTENT_MAX_VIDEO_MB,
+)
 
 router = APIRouter()
 
@@ -115,14 +121,43 @@ async def create_content(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin)
 ):
-    # Upload file
-    file_url = await upload_file(file, folder=f"syllabus/content/{chapter_id}")
+    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    ct = (content_type or "").strip().lower()
+    if ct == "video":
+        allowed = ALLOWED_VIDEO_TYPES
+        max_mb = SYLLABUS_CONTENT_MAX_VIDEO_MB
+    elif ct in ("pdf", "ppt", "pptx", "document", "deck"):
+        # Store as pdf / ppt in DB — map generic labels to document MIME whitelist
+        if ct == "pptx":
+            ct = "ppt"
+        if ct == "document":
+            ct = "pdf"
+        if ct == "deck":
+            ct = "ppt"
+        allowed = ALLOWED_DOCUMENT_TYPES
+        max_mb = SYLLABUS_CONTENT_MAX_DOC_MB
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="content_type must be one of: video, pdf, ppt",
+        )
+
+    # Upload file (typed allowlist + syllabus-specific size caps)
+    file_url = await upload_file(
+        file,
+        folder=f"syllabus/content/{chapter_id}",
+        allowed_types=allowed,
+        max_size_mb=max_mb,
+    )
     
     content = SyllabusContent(
         chapter_id=chapter_id,
         title=title,
         description=description,
-        content_type=content_type,
+        content_type=ct,
         file_url=file_url,
         order_index=order_index
     )
