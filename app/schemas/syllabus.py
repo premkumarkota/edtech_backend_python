@@ -61,6 +61,28 @@ class SyllabusDetail(SyllabusSummary):
     class Config:
         from_attributes = True
 
+
+# Student course view: Udemy-style layout (hero video + documents below)
+class ChapterStudentResponse(ChapterBase):
+    """Chapter with normalized layout fields for student apps."""
+
+    id: int
+    syllabus_id: int
+    created_at: datetime
+    contents: List[SyllabusContentResponse] = []
+    hero_video: Optional[SyllabusContentResponse] = None
+    document_contents: List[SyllabusContentResponse] = []
+    extra_videos: List[SyllabusContentResponse] = []
+    class Config:
+        from_attributes = True
+
+
+class SyllabusDetailStudent(SyllabusSummary):
+    chapters: List[ChapterStudentResponse] = []
+    class Config:
+        from_attributes = True
+
+
 # Backward compatibility or generic
 class SyllabusResponse(SyllabusSummary):
     pass
