@@ -235,6 +235,10 @@ def reorder_chapter_contents(
         raise HTTPException(status_code=404, detail="Chapter not found")
 
     ids = payload.ordered_content_ids
+    if len(ids) != len(set(ids)):
+        raise HTTPException(
+            status_code=400, detail="ordered_content_ids must not contain duplicates"
+        )
     by_id = {c.id: c for c in ch.contents}
     if set(ids) != set(by_id.keys()):
         raise HTTPException(
@@ -244,8 +248,6 @@ def reorder_chapter_contents(
                 "exactly once, in playback order."
             ),
         )
-    if len(ids) != len(by_id):
-        raise HTTPException(status_code=400, detail="Duplicate content ids.")
 
     for idx, cid in enumerate(ids):
         by_id[cid].order_index = idx
