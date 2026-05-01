@@ -12,7 +12,15 @@ from app.schemas.teacher import (
 )
 from app.utils.firebase import verify_firebase_token
 from app.utils.security import create_access_token
-from app.services.storage_service import upload_file, ALLOWED_DOCUMENT_TYPES, ALLOWED_VIDEO_TYPES, MAX_VIDEO_SIZE_MB, generate_signed_url
+from app.services.storage_service import (
+    upload_file,
+    ALLOWED_DOCUMENT_TYPES,
+    ALLOWED_IMAGE_TYPES,
+    ALLOWED_VIDEO_TYPES,
+    MAX_VIDEO_SIZE_MB,
+    MAX_PROFILE_AVATAR_MB,
+    generate_signed_url,
+)
 import uuid
 
 
@@ -253,6 +261,28 @@ async def upload_teacher_video(
         max_size_mb=MAX_VIDEO_SIZE_MB,
     )
     return {"video_url": file_url}
+
+
+@router.post("/upload-profile-photo", response_model=TeacherProfileResponse)
+async def upload_teacher_profile_photo(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_teacher),
+):
+    """
+    Multipart upload for teacher profile photo (JPEG / PNG / WebP, max 5 MB).
+    Sets users.profile_image_url and returns the full merged teacher profile.
+    """
+    url = await upload_file(
+        file,
+        folder=f"teachers/avatars/{current_user.id}",
+        allowed_types=ALLOWED_IMAGE_TYPES,
+        max_size_mb=MAX_PROFILE_AVATAR_MB,
+    )
+    current_user.profile_image_url = url
+    db.commit()
+    db.refresh(current_user)
+    return _build_teacher_response(current_user, db)
 
 
 @router.get("/profile", response_model=TeacherProfileResponse)

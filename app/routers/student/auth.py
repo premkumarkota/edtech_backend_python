@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_student
@@ -12,6 +12,11 @@ from app.schemas.student import (
 )
 from app.utils.firebase import verify_firebase_token
 from app.utils.security import create_access_token
+from app.services.storage_service import (
+    upload_file,
+    ALLOWED_IMAGE_TYPES,
+    MAX_PROFILE_AVATAR_MB,
+)
 
 
 router = APIRouter()
@@ -170,6 +175,26 @@ def complete_student_onboarding(
     }
 
 
+def _student_profile_dict(user: User, db: Session) -> dict:
+    """Merged User + StudentProfile + category name (same shape as GET /profile)."""
+    from app.models.category import Category
+
+    profile = user.student_profile
+    category = (
+        db.query(Category).filter(Category.id == user.category_id).first()
+        if user.category_id
+        else None
+    )
+    return {
+        **user.__dict__,
+        "dob": profile.dob if profile else None,
+        "age": profile.age if profile else None,
+        "school_college": profile.school_college if profile else None,
+        "location": profile.location if profile else None,
+        "category_name": category.name if category else None,
+    }
+
+
 @router.get("/profile", response_model=StudentProfileResponse)
 def get_student_profile(
     db: Session = Depends(get_db),
@@ -179,17 +204,29 @@ def get_student_profile(
     Get current student's profile.
     Merges core User data with academic StudentProfile data.
     """
-    from app.models.category import Category
-    profile = current_user.student_profile
-    category = db.query(Category).filter(Category.id == current_user.category_id).first() if current_user.category_id else None
-    return {
-        **current_user.__dict__,
-        "dob": profile.dob if profile else None,
-        "age": profile.age if profile else None,
-        "school_college": profile.school_college if profile else None,
-        "location": profile.location if profile else None,
-        "category_name": category.name if category else None,
-    }
+    return _student_profile_dict(current_user, db)
+
+
+@router.post("/upload-profile-photo", response_model=StudentProfileResponse)
+async def upload_student_profile_photo(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_student),
+):
+    """
+    Multipart upload for profile picture (JPEG / PNG / WebP, max 5 MB).
+    Saves to object storage, sets users.profile_image_url, returns full profile.
+    """
+    url = await upload_file(
+        file,
+        folder=f"students/avatars/{current_user.id}",
+        allowed_types=ALLOWED_IMAGE_TYPES,
+        max_size_mb=MAX_PROFILE_AVATAR_MB,
+    )
+    current_user.profile_image_url = url
+    db.commit()
+    db.refresh(current_user)
+    return _student_profile_dict(current_user, db)
 
 
 @router.post("/logout", response_model=MessageResponse)

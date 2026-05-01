@@ -46,6 +46,8 @@ ALLOWED_VIDEO_TYPES = {
 
 MAX_FILE_SIZE_MB = 20
 MAX_VIDEO_SIZE_MB = 10
+# Profile avatars (student / teacher apps)
+MAX_PROFILE_AVATAR_MB = 5
 
 # Admin syllabus chapter materials (larger than generic document upload)
 SYLLABUS_CONTENT_MAX_VIDEO_MB = 100
