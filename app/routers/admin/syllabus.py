@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from typing import List, Optional
 
@@ -9,9 +9,19 @@ from app.models.user import User
 from app.models.syllabus import Syllabus, Chapter, SyllabusContent
 from app.models.category import Category
 from app.schemas.syllabus import (
-    SyllabusSummary, SyllabusDetail, SyllabusCreate,
-    ChapterResponse, SyllabusContentResponse, ChapterBase
+    SyllabusSummary,
+    SyllabusCreate,
+    ChapterResponse,
+    SyllabusContentResponse,
+    ChapterBase,
+    SyllabusDetailStudent,
+    ChapterStudentResponse,
 )
+from app.schemas.syllabus_admin_requests import (
+    ReorderChapterContentsRequest,
+    SyllabusContentPatch,
+)
+from app.services.syllabus_layout import syllabus_to_detail_with_layout, chapter_to_layout_response
 from app.services.storage_service import (
     upload_file,
     ALLOWED_DOCUMENT_TYPES,
@@ -63,16 +73,27 @@ def list_syllabus(
         s.chapter_count = db.query(Chapter).filter(Chapter.syllabus_id == s.id).count()
     return results
 
-@router.get("/{syllabus_id}", response_model=SyllabusDetail)
+@router.get("/{syllabus_id}", response_model=SyllabusDetailStudent)
 def get_syllabus_detail(
     syllabus_id: int,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    s = db.query(Syllabus).filter(Syllabus.id == syllabus_id).first()
+    """
+    Same enriched shape as the student app (hero_video, document_contents,
+    extra_videos) so the admin panel can preview Udemy-style grouping.
+    """
+    s = (
+        db.query(Syllabus)
+        .options(
+            joinedload(Syllabus.chapters).joinedload(Chapter.contents),
+        )
+        .filter(Syllabus.id == syllabus_id)
+        .first()
+    )
     if not s:
         raise HTTPException(status_code=404, detail="Syllabus not found")
-    return s
+    return syllabus_to_detail_with_layout(s)
 
 @router.delete("/{syllabus_id}")
 def delete_syllabus(syllabus_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
@@ -117,7 +138,7 @@ async def create_content(
     description: Optional[str] = Form(None),
     content_type: str = Form(...), # video, pdf, ppt
     file: UploadFile = File(...),
-    order_index: int = Form(0),
+    order_index: Optional[int] = Form(default=None),
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin)
 ):
@@ -145,6 +166,15 @@ async def create_content(
             detail="content_type must be one of: video, pdf, ppt",
         )
 
+    placement = order_index
+    if placement is None:
+        mx = (
+            db.query(func.max(SyllabusContent.order_index))
+            .filter(SyllabusContent.chapter_id == chapter_id)
+            .scalar()
+        )
+        placement = (mx if mx is not None else -1) + 1
+
     # Upload file (typed allowlist + syllabus-specific size caps)
     file_url = await upload_file(
         file,
@@ -159,12 +189,80 @@ async def create_content(
         description=description,
         content_type=ct,
         file_url=file_url,
-        order_index=order_index
+        order_index=placement,
     )
     db.add(content)
     db.commit()
     db.refresh(content)
     return content
+
+@router.patch("/content/{content_id}", response_model=SyllabusContentResponse)
+def patch_content(
+    content_id: int,
+    payload: SyllabusContentPatch,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    ct = db.query(SyllabusContent).filter(SyllabusContent.id == content_id).first()
+    if not ct:
+        raise HTTPException(status_code=404, detail="Content not found")
+    if payload.title is not None:
+        t = payload.title.strip()
+        if not t:
+            raise HTTPException(status_code=400, detail="title cannot be empty")
+        ct.title = t
+    if payload.description is not None:
+        ct.description = payload.description
+    if payload.order_index is not None:
+        ct.order_index = payload.order_index
+    db.commit()
+    db.refresh(ct)
+    return ct
+
+
+@router.put(
+    "/chapters/{chapter_id}/contents/reorder",
+    response_model=ChapterStudentResponse,
+)
+def reorder_chapter_contents(
+    chapter_id: int,
+    payload: ReorderChapterContentsRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    ch = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not ch:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    ids = payload.ordered_content_ids
+    by_id = {c.id: c for c in ch.contents}
+    if set(ids) != set(by_id.keys()):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "ordered_content_ids must list every content row in this chapter "
+                "exactly once, in playback order."
+            ),
+        )
+    if len(ids) != len(by_id):
+        raise HTTPException(status_code=400, detail="Duplicate content ids.")
+
+    for idx, cid in enumerate(ids):
+        by_id[cid].order_index = idx
+    db.commit()
+    db.refresh(ch)
+    for row in ch.contents:
+        db.refresh(row)
+
+    # Re-fetch for clean ordering (relationship collection may be unordered)
+    ch2 = (
+        db.query(Chapter)
+        .options(joinedload(Chapter.contents))
+        .filter(Chapter.id == chapter_id)
+        .first()
+    )
+    return chapter_to_layout_response(ch2)
+
 
 @router.delete("/content/{content_id}")
 def delete_content(content_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):

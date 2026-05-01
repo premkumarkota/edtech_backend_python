@@ -1,66 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional
+from typing import List
 
 from app.database import get_db
 from app.dependencies import require_student
 from app.models.user import User
-from app.models.syllabus import Syllabus, Chapter, SyllabusContent
-from app.schemas.syllabus import (
-    SyllabusSummary,
-    SyllabusDetailStudent,
-    ChapterStudentResponse,
-    SyllabusContentResponse,
-)
+from app.models.syllabus import Syllabus, Chapter
+from app.schemas.syllabus import SyllabusSummary, SyllabusDetailStudent
+from app.services.syllabus_layout import syllabus_to_detail_with_layout
 
 router = APIRouter()
-
-
-def _layout_chapter_for_student(ch: Chapter) -> ChapterStudentResponse:
-    """First video = hero; remaining non-video items = documents; other videos = extra."""
-    items = sorted(
-        ch.contents,
-        key=lambda c: (c.order_index or 0, c.id or 0),
-    )
-    videos: List[SyllabusContent] = [
-        x for x in items if (x.content_type or "").lower() == "video"
-    ]
-    docs: List[SyllabusContent] = [
-        x for x in items if (x.content_type or "").lower() != "video"
-    ]
-    hero: Optional[SyllabusContent] = videos[0] if videos else None
-    extra_videos = videos[1:] if len(videos) > 1 else []
-
-    return ChapterStudentResponse(
-        id=ch.id,
-        syllabus_id=ch.syllabus_id,
-        title=ch.title,
-        description=ch.description,
-        order_index=ch.order_index or 0,
-        created_at=ch.created_at,
-        contents=[SyllabusContentResponse.model_validate(x) for x in items],
-        hero_video=SyllabusContentResponse.model_validate(hero) if hero else None,
-        document_contents=[SyllabusContentResponse.model_validate(x) for x in docs],
-        extra_videos=[SyllabusContentResponse.model_validate(x) for x in extra_videos],
-    )
-
-
-def _syllabus_to_student_detail(s: Syllabus) -> SyllabusDetailStudent:
-    chapters_in_order = sorted(
-        s.chapters,
-        key=lambda ch: (ch.order_index or 0, ch.id or 0),
-    )
-    return SyllabusDetailStudent(
-        id=s.id,
-        category_id=s.category_id,
-        title=s.title,
-        description=s.description,
-        thumbnail_url=s.thumbnail_url,
-        is_active=s.is_active,
-        created_at=s.created_at,
-        chapter_count=len(s.chapters),
-        chapters=[_layout_chapter_for_student(ch) for ch in chapters_in_order],
-    )
 
 @router.get("/", response_model=List[SyllabusSummary])
 def get_my_syllabus(
@@ -104,4 +53,4 @@ def get_syllabus_detail(
     if s.category_id != student.category_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    return _syllabus_to_student_detail(s)
+    return syllabus_to_detail_with_layout(s)
