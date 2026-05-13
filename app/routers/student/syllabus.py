@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from typing import List
+from typing import List, Optional
 
 from app.database import get_db
 from app.dependencies import require_student
@@ -15,14 +15,16 @@ router = APIRouter()
 def get_my_syllabus(
     student: User = Depends(require_student),
     db: Session = Depends(get_db),
+    category_id: Optional[int] = Query(None, description="Browse a different category"),
 ):
-    """List all subjects available for the student's category."""
-    if not student.category_id:
+    """List all subjects for a category. Falls back to student's own category."""
+    effective_category_id = category_id or student.category_id
+    if not effective_category_id:
         return []
 
     results = (
         db.query(Syllabus)
-        .filter(Syllabus.category_id == student.category_id, Syllabus.is_active == True)
+        .filter(Syllabus.category_id == effective_category_id, Syllabus.is_active == True)
         .order_by(Syllabus.created_at.desc())
         .all()
     )
@@ -49,8 +51,5 @@ def get_syllabus_detail(
 
     if not s:
         raise HTTPException(status_code=404, detail="Syllabus not found")
-
-    if s.category_id != student.category_id:
-        raise HTTPException(status_code=403, detail="Access denied")
 
     return syllabus_to_detail_with_layout(s)

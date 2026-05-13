@@ -212,7 +212,16 @@ def book_session(
     Validates: subscription minutes, teacher approval, availability, no double-booking.
     Sends FCM push notification to teacher on success.
     """
-    # 1. Subscription check
+    # 1. Self-booking guard — same person can hold both student and teacher roles
+    #    (dual-role feature). Block booking yourself as your own teacher.
+    teacher_user = db.query(User).filter(User.id == payload.teacher_id).first()
+    if teacher_user and teacher_user.phone_number and teacher_user.phone_number == student.phone_number:
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot book a session with yourself.",
+        )
+
+    # 2. Subscription check
     sub = require_video_minutes(student.id, db)
     remaining = sub.video_call_minutes_total - sub.video_call_minutes_used
     if remaining < payload.duration_mins:
@@ -221,14 +230,14 @@ def book_session(
             detail=f"Insufficient minutes. You have {remaining} mins remaining.",
         )
 
-    # 2. Teacher exists and is approved
+    # 3. Teacher exists and is approved
     teacher, _ = _get_approved_teacher(payload.teacher_id, db)
 
-    # 3. Future time check
+    # 4. Future time check
     if payload.scheduled_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="scheduled_at must be in the future.")
 
-    # 4. Availability + double-booking check
+    # 5. Availability + double-booking check
     _check_teacher_availability(
         teacher_id=payload.teacher_id,
         scheduled_at=payload.scheduled_at,
@@ -236,7 +245,7 @@ def book_session(
         db=db,
     )
 
-    # 5. Create session
+    # 6. Create session
     channel_name = f"session_{uuid.uuid4().hex}"
     session = VideoCallSession(
         student_id=student.id,
@@ -291,6 +300,14 @@ def request_instant_session(
 ):
     """Ask an Available Now teacher for an immediate session."""
     _expire_stale_instant_requests(db)
+
+    # Self-booking guard
+    instant_teacher = db.query(User).filter(User.id == payload.teacher_id).first()
+    if instant_teacher and instant_teacher.phone_number and instant_teacher.phone_number == student.phone_number:
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot request a session with yourself.",
+        )
 
     sub = require_video_minutes(student.id, db)
     remaining = sub.video_call_minutes_total - sub.video_call_minutes_used

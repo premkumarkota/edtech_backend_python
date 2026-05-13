@@ -53,38 +53,28 @@ def sync_student(request: StudentSyncRequest, db: Session = Depends(get_db)):
             detail="Firebase token missing UID"
         )
 
-    # --- Find existing user ---
+    # Find existing STUDENT row for this Firebase identity.
+    # Same phone can also exist as a TEACHER row — that is intentional and allowed.
+    user = db.query(User).filter(
+        User.firebase_uid == firebase_uid,
+        User.role == UserRole.STUDENT,
+    ).first()
 
-    # 1. Try by Firebase UID
-    user = db.query(User).filter(User.firebase_uid == firebase_uid).first()
-
-    # 2. If not found, try by phone number (handles re-install / new Firebase UID)
+    # Re-install / new Firebase UID — match by phone + role
     if not user and phone_number:
-        user = db.query(User).filter(User.phone_number == phone_number).first()
+        user = db.query(User).filter(
+            User.phone_number == phone_number,
+            User.role == UserRole.STUDENT,
+        ).first()
         if user:
-            # Same phone, new UID — update it
             user.firebase_uid = firebase_uid
             db.commit()
             db.refresh(user)
 
     is_new_user = False
 
-    if user:
-        # --- EXISTING USER ---
-        # Block if they're a teacher trying to use student app
-        if user.role == UserRole.TEACHER:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="This phone is registered as a Teacher. Please use the Teacher App."
-            )
-        # Block if they're an admin
-        if user.role == UserRole.ADMIN:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="This phone is registered as an Admin. Cannot use Student App."
-            )
-    else:
-        # --- NEW USER ---
+    if not user:
+        # --- NEW STUDENT ---
         user = User(
             firebase_uid=firebase_uid,
             phone_number=phone_number,

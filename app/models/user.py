@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Enum, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -21,10 +21,19 @@ class User(Base):
     """
     __tablename__ = "users"
 
+    # ── Composite unique constraints ──────────────────────────────────────────
+    # Same phone/Firebase UID can exist with DIFFERENT roles.
+    # e.g. +91-9876543210 can be both a STUDENT (id=12) and a TEACHER (id=5).
+    # Admin uses email auth only — phone/firebase_uid will be NULL for admin rows.
+    __table_args__ = (
+        UniqueConstraint("phone_number", "role", name="uq_users_phone_role"),
+        UniqueConstraint("firebase_uid", "role",  name="uq_users_firebase_role"),
+    )
+
     id                   = Column(Integer, primary_key=True, index=True)
     name                 = Column(String(100), nullable=True)
     email                = Column(String(255), unique=True, nullable=True, index=True)
-    phone_number         = Column(String(20), unique=True, nullable=True, index=True)
+    phone_number         = Column(String(20), nullable=True, index=True)   # unique per role, not globally
     hashed_password      = Column(String(255), nullable=True)   # Only for admin
     role                 = Column(
         Enum(UserRole, values_callable=lambda x: [e.value for e in x]),
@@ -33,7 +42,7 @@ class User(Base):
     is_active            = Column(Boolean, default=True)
 
     # Firebase (for student & teacher apps)
-    firebase_uid         = Column(String(128), unique=True, nullable=True, index=True)
+    firebase_uid         = Column(String(128), nullable=True, index=True)  # unique per role, not globally
 
     # Onboarding
     onboarding_completed = Column(Boolean, default=False)

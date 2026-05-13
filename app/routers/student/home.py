@@ -1,7 +1,7 @@
 from datetime import date as date_type, datetime, time, timedelta, timezone
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -38,19 +38,18 @@ def _is_available_now(profile: TeacherProfile | None) -> bool:
 def get_home_feed(
     db: Session = Depends(get_db),
     student: User = Depends(get_onboarded_student),
+    category_id: Optional[int] = Query(None, description="Browse a different category"),
 ):
     """
-    Student home feed — list of APPROVED teachers in the student's category.
+    Student home feed — list of APPROVED teachers filtered by category.
 
-    Returns teacher cards with rate_per_minute, subjects, languages, location
-    so students can compare before tapping into the detail page.
-
-    Filters:
-      - Same category as student
-      - APPROVED status only
-      - is_active = True
+    category_id (optional): browse any category without changing profile.
+    Falls back to student's own category_id when not supplied.
     """
-    if not student.category_id:
+    # Use requested category if provided, else fall back to student's own
+    effective_category_id = category_id or student.category_id
+
+    if not effective_category_id:
         return HomeFeedResponse(student_category_id=None, teachers=[], total_count=0)
 
     teachers = (
@@ -60,7 +59,7 @@ def get_home_feed(
         .filter(
             User.role == UserRole.TEACHER,
             User.is_active == True,
-            User.category_id == student.category_id,
+            User.category_id == effective_category_id,
             TeacherProfile.status == TeacherStatus.APPROVED,
         )
         .order_by(User.created_at.desc())
@@ -69,7 +68,7 @@ def get_home_feed(
 
     if not teachers:
         return HomeFeedResponse(
-            student_category_id=student.category_id,
+            student_category_id=effective_category_id,
             teachers=[],
             total_count=0,
         )
@@ -98,7 +97,7 @@ def get_home_feed(
     ]
 
     return HomeFeedResponse(
-        student_category_id=student.category_id,
+        student_category_id=effective_category_id,
         teachers=teacher_cards,
         total_count=len(teacher_cards),
     )

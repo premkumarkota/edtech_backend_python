@@ -1,7 +1,7 @@
 """teacher_bank_details_and_withdrawals
 
 Revision ID: g1h2i3j4k5l6
-Revises: e1f2a3b4c5d6
+Revises: f1a2b3c4d5e6
 Create Date: 2026-05-13
 
 Creates:
@@ -15,7 +15,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "g1h2i3j4k5l6"
-down_revision = "e1f2a3b4c5d6"
+down_revision = "f1a2b3c4d5e6"
 branch_labels = None
 depends_on = None
 
