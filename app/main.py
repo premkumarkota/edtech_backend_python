@@ -18,6 +18,7 @@ from app.models import (  # noqa: F401
     Quiz, QuizQuestion, QuizAttempt, QuizAnswer,
     TeacherAvailability, TeacherAvailabilityOverride,
     InstantSessionRequest, InstantSessionRequestStatus,
+    TeacherBankDetails, WithdrawalRequest,
 )
 
 # ── Routers ──────────────────────────────────────────────────────────────────
@@ -33,6 +34,7 @@ from app.routers.admin import payouts as admin_payouts
 from app.routers.admin import config as admin_config
 from app.routers.admin import stats as admin_stats
 from app.routers.admin import sessions as admin_sessions
+from app.routers.admin import withdrawals as admin_withdrawals
 
 from app.routers.common import categories as common_categories
 from app.routers.common import legal as common_legal
@@ -52,6 +54,7 @@ from app.routers.teacher import availability as teacher_availability
 from app.routers.teacher import auth as teacher_auth
 from app.routers.teacher import home as teacher_home
 from app.routers.teacher import sessions as teacher_sessions
+from app.routers.teacher import withdrawals as teacher_withdrawals
 from app.routers.payments import router as payments_webhook
 from app.services.reminder_scheduler import start_scheduler, stop_scheduler
 
@@ -156,6 +159,10 @@ app.include_router(admin_sessions.router,
                    prefix="/api/admin/sessions",
                    tags=["Admin - Session Monitoring"])
 
+app.include_router(admin_withdrawals.router,
+                   prefix="/api/admin/withdrawals",
+                   tags=["Admin - Teacher Withdrawals"])
+
 
 # ═══════════════════════════════════════════════════════════════
 # COMMON APIs
@@ -219,6 +226,10 @@ app.include_router(teacher_sessions.router,
 app.include_router(teacher_profile.router,
                    prefix="/api/teacher/profile",
                    tags=["Teacher - Profile"])
+
+app.include_router(teacher_withdrawals.router,
+                   prefix="/api/teacher/withdrawals",
+                   tags=["Teacher - Withdrawals"])
 
 app.include_router(teacher_availability.router,
                    prefix="/api/teacher/availability",

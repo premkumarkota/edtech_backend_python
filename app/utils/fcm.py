@@ -265,3 +265,68 @@ def notify_student_instant_session_expired(
         body=f"{teacher_name} did not respond in time. Please try another tutor.",
         data={"type": "instant_session_expired", "request_id": request_id},
     )
+
+
+# ── Withdrawal Notifications ──────────────────────────────────────────────────
+
+def notify_withdrawal_processing(
+    fcm_token: str,
+    amount: float,
+    withdrawal_id: int,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Withdrawal Initiated",
+        body=(
+            f"Your withdrawal of ₹{amount:.2f} is being processed. "
+            "Funds will reach your bank account shortly."
+        ),
+        data={"type": "withdrawal_processing", "withdrawal_id": withdrawal_id},
+    )
+
+
+def notify_withdrawal_completed(
+    fcm_token: str,
+    amount: float,
+    withdrawal_id: int,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Payment Transferred!",
+        body=f"₹{amount:.2f} has been transferred to your bank account successfully.",
+        data={"type": "withdrawal_completed", "withdrawal_id": withdrawal_id},
+    )
+
+
+def notify_withdrawal_failed(
+    fcm_token: str,
+    amount: float,
+    withdrawal_id: int,
+    reason: str = "",
+) -> bool:
+    body = f"Your withdrawal of ₹{amount:.2f} could not be processed."
+    if reason:
+        body += f" Reason: {reason}"
+    body += " Please contact support."
+    return send_push(
+        fcm_token=fcm_token,
+        title="Withdrawal Failed",
+        body=body,
+        data={"type": "withdrawal_failed", "withdrawal_id": withdrawal_id},
+    )
+
+
+def notify_withdrawal_rejected(
+    fcm_token: str,
+    amount: float,
+    reason: str,
+) -> bool:
+    return send_push(
+        fcm_token=fcm_token,
+        title="Withdrawal Rejected",
+        body=(
+            f"Your withdrawal request of ₹{amount:.2f} was rejected. "
+            f"Reason: {reason}"
+        ),
+        data={"type": "withdrawal_rejected"},
+    )

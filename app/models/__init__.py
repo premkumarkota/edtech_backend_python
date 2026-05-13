@@ -27,6 +27,9 @@ from app.models.instant_session import (                        # Depends on Use
 from app.models.availability import (                          # Depends on User
     TeacherAvailability, TeacherAvailabilityOverride
 )
+from app.models.withdrawal import (                            # Depends on User
+    TeacherBankDetails, WithdrawalRequest
+)
 
 __all__ = [
     # Core
@@ -46,4 +49,6 @@ __all__ = [
     "VideoCallSession", "SessionStatus",
     "InstantSessionRequest", "InstantSessionRequestStatus",
     "TeacherAvailability", "TeacherAvailabilityOverride",
+    # Withdrawal
+    "TeacherBankDetails", "WithdrawalRequest",
 ]

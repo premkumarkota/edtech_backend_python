@@ -25,10 +25,15 @@ class Settings(BaseSettings):
     GCP_BUCKET_NAME: Optional[str] = None
     GCP_PROJECT_ID: Optional[str] = "edtech-107e3"
 
-    # Razorpay
+    # Razorpay — collection (student payments)
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""
+
+    # Razorpay X — payouts (teacher withdrawals)
+    # The Current Account number linked to your Razorpay X account.
+    # Find it in Razorpay Dashboard → Payouts → Settings → Account Number.
+    RAZORPAY_ACCOUNT_NUMBER: str = ""
 
     # Agora RTC
     AGORA_APP_ID: str = ""
