@@ -39,7 +39,7 @@ from app.schemas.withdrawal import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-MIN_WITHDRAWAL = Decimal("100.00")
+MIN_WITHDRAWAL = Decimal("1.00")
 
 # Statuses that mean "a withdrawal is already in-flight"
 _ACTIVE_STATUSES = {"pending", "processing"}
@@ -225,7 +225,7 @@ def request_withdrawal(
     Guards (all checked server-side — never trust client):
     1. Teacher must have bank details saved.
     2. No active (pending/processing) withdrawal already exists.
-    3. Requested amount >= MIN_WITHDRAWAL (₹100).
+    3. Requested amount >= MIN_WITHDRAWAL (₹1).
     4. Requested amount <= actual pending earnings balance.
     """
     # Guard 1: bank details required

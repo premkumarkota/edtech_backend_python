@@ -72,8 +72,8 @@ class WithdrawalRequestCreate(BaseModel):
     @field_validator("amount")
     @classmethod
     def validate_amount(cls, v: Decimal) -> Decimal:
-        if v < Decimal("100.00"):
-            raise ValueError("Minimum withdrawal amount is ₹100")
+        if v < Decimal("1.00"):
+            raise ValueError("Minimum withdrawal amount is ₹1")
         if v > Decimal("500000.00"):
             raise ValueError("Maximum single withdrawal is ₹5,00,000")
         return v.quantize(Decimal("0.01"))
@@ -100,7 +100,7 @@ class WithdrawalBalanceResponse(BaseModel):
     available_balance: Decimal     # sum of pending TeacherEarning.gross_earning
     pending_sessions: int          # count of pending earning rows
     active_withdrawal: Optional[WithdrawalRequestResponse]  # if one is in flight
-    minimum_withdrawal: Decimal = Decimal("100.00")
+    minimum_withdrawal: Decimal = Decimal("1.00")
 
 
 # ── Admin schemas ─────────────────────────────────────────────────────────────

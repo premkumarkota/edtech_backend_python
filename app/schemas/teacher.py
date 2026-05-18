@@ -64,6 +64,7 @@ class TeacherProfileUpdateRequest(BaseModel):
     subjects: Optional[List[str]] = None
     languages: Optional[List[str]] = None
     achievements: Optional[str] = None
+    video_url: Optional[str] = None  # Teacher can update demo/intro video
 
 
 # ========== RESPONSE SCHEMAS ==========

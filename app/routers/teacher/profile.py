@@ -54,6 +54,8 @@ def update_teacher_profile(
             profile.languages = request.languages
         if request.achievements is not None:
             profile.achievements = request.achievements
+        if request.video_url is not None:
+            profile.video_url = request.video_url
 
     db.commit()
     db.refresh(current_user)

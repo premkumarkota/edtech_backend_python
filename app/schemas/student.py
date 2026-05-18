@@ -110,6 +110,10 @@ class TeacherDetailResponse(BaseModel):
     achievements: Optional[str] = None
     is_available_now: bool = False
 
+    # Media (visible to students)
+    document_url: Optional[str] = None   # Verification / experience document
+    video_url: Optional[str] = None      # Demo / intro video
+
     class Config:
         from_attributes = True
 

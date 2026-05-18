@@ -157,6 +157,8 @@ def get_teacher_detail(
         languages=profile.languages if profile else [],
         achievements=profile.achievements if profile else None,
         is_available_now=_is_available_now(profile),
+        document_url=profile.document_url if profile else None,
+        video_url=profile.video_url if profile else None,
     )
 
 
