@@ -429,7 +429,7 @@ def join_session(
         if sess.scheduled_at.tzinfo is None
         else sess.scheduled_at
     )
-    earliest_join = scheduled - timedelta(minutes=10)
+    earliest_join = scheduled - timedelta(minutes=15)
     if datetime.now(timezone.utc) < earliest_join:
         raise HTTPException(
             status_code=400,

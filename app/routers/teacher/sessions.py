@@ -280,8 +280,8 @@ def join_session(
 
     now = datetime.now(timezone.utc)
     scheduled = sess.scheduled_at.replace(tzinfo=timezone.utc) if sess.scheduled_at.tzinfo is None else sess.scheduled_at
-    if now < scheduled - timedelta(minutes=10):
-        raise HTTPException(status_code=400, detail="Too early to join. Join within 10 minutes of the session.")
+    if now < scheduled - timedelta(minutes=15):
+        raise HTTPException(status_code=400, detail="Too early to join. Join within 15 minutes of the session.")
 
     # Mark in-progress on first join
     if sess.status == SessionStatus.BOOKED.value:
