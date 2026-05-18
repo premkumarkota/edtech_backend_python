@@ -1,4 +1,6 @@
 from datetime import date as date_type, datetime, time, timedelta, timezone
+
+IST = timezone(timedelta(hours=5, minutes=30))  # India Standard Time
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -283,7 +285,7 @@ def get_teacher_available_dates(
     working_weekdays = {b.day_of_week for b in active_blocks}  # set of 0-6
 
     # Dates the teacher has blocked in this window
-    today = date_type.today()
+    today = datetime.now(IST).date()  # IST — GCP server runs UTC
     end_date = today + timedelta(days=days - 1)
     blocked_overrides = db.query(TeacherAvailabilityOverride).filter(
         TeacherAvailabilityOverride.teacher_id == teacher_id,

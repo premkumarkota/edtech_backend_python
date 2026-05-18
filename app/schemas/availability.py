@@ -27,7 +27,15 @@ class AvailabilityCreateRequest(BaseModel):
     def validate_end_after_start(cls, end: time, info) -> time:
         start = info.data.get("start_time")
         if start and end <= start:
-            raise ValueError("end_time must be after start_time")
+            raise ValueError(
+                f"End time ({end.strftime('%I:%M %p')} IST) must be after "
+                f"start time ({start.strftime('%I:%M %p')} IST)"
+            )
+        if start:
+            start_mins = start.hour * 60 + start.minute
+            end_mins = end.hour * 60 + end.minute
+            if end_mins - start_mins < 30:
+                raise ValueError("Time window must be at least 30 minutes")
         return end
 
     @field_validator("slot_duration_mins")

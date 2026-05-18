@@ -10,6 +10,9 @@ PUT    /api/teacher/fcm-token             → save device push token
 from datetime import date as date_type, datetime, timezone, timedelta
 from typing import List
 
+# India Standard Time = UTC+5:30
+IST = timezone(timedelta(hours=5, minutes=30))
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -197,6 +200,9 @@ def block_date(
     db: Session = Depends(get_db),
 ):
     """Mark a specific date as unavailable (holiday / day off)."""
+    today_ist = datetime.now(IST).date()
+    if payload.date < today_ist:
+        raise HTTPException(status_code=400, detail="Cannot block a past date.")
     # Upsert — if already exists just ensure it's blocked
     override = db.query(TeacherAvailabilityOverride).filter(
         TeacherAvailabilityOverride.teacher_id == current_user.id,
@@ -239,8 +245,8 @@ def get_blocked_dates(
     current_user: User = Depends(get_current_teacher),
     db: Session = Depends(get_db),
 ):
-    """Return all upcoming blocked dates for the teacher."""
-    today = date_type.today()
+    """Return all upcoming blocked dates for the teacher (IST today as cutoff)."""
+    today = datetime.now(IST).date()  # IST — GCP server runs UTC
     overrides = (
         db.query(TeacherAvailabilityOverride)
         .filter(
