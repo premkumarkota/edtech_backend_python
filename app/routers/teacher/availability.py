@@ -21,7 +21,7 @@ from app.dependencies import get_current_teacher
 from app.models.user import User
 from app.models.teacher_profile import TeacherProfile, TeacherStatus
 from app.models.session import VideoCallSession, SessionStatus
-from app.models.availability import TeacherAvailability, TeacherAvailabilityOverride
+from app.models.availability import TeacherAvailability, TeacherAvailabilityOverride, TeacherDateSlot
 from app.schemas.availability import (
     AvailabilityCreateRequest,
     AvailabilityResponse,
@@ -29,6 +29,8 @@ from app.schemas.availability import (
     FcmTokenRequest,
     InstantAvailabilityRequest,
     InstantAvailabilityResponse,
+    DateSlotCreateRequest,
+    DateSlotResponse,
 )
 
 router = APIRouter()
@@ -258,6 +260,88 @@ def get_blocked_dates(
         .all()
     )
     return [o.date for o in overrides]
+
+
+# ── One-time date slots ───────────────────────────────────────────────────────
+
+@router.post("/date-slot", response_model=DateSlotResponse, status_code=201)
+def add_date_slot(
+    payload: DateSlotCreateRequest,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Add a one-time availability window for a specific calendar date."""
+    today_ist = datetime.now(IST).date()
+    if payload.date < today_ist:
+        raise HTTPException(status_code=400, detail="Cannot add a slot for a past date.")
+
+    # Overlap check with existing date slots on the same date
+    existing = (
+        db.query(TeacherDateSlot)
+        .filter(
+            TeacherDateSlot.teacher_id == current_user.id,
+            TeacherDateSlot.date == payload.date,
+            TeacherDateSlot.is_active == True,
+        )
+        .all()
+    )
+    for s in existing:
+        if payload.start_time < s.end_time and payload.end_time > s.start_time:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Time overlap with existing slot on {payload.date} "
+                    f"{s.start_time.strftime('%H:%M')}–{s.end_time.strftime('%H:%M')}"
+                ),
+            )
+
+    slot = TeacherDateSlot(
+        teacher_id=current_user.id,
+        date=payload.date,
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        slot_duration_mins=payload.slot_duration_mins,
+    )
+    db.add(slot)
+    db.commit()
+    db.refresh(slot)
+    return slot
+
+
+@router.delete("/date-slot/{slot_id}", status_code=204)
+def remove_date_slot(
+    slot_id: int,
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete a one-time date slot."""
+    slot = db.query(TeacherDateSlot).filter(
+        TeacherDateSlot.id == slot_id,
+        TeacherDateSlot.teacher_id == current_user.id,
+    ).first()
+    if not slot:
+        raise HTTPException(status_code=404, detail="Date slot not found.")
+    slot.is_active = False
+    db.commit()
+
+
+@router.get("/date-slots", response_model=List[DateSlotResponse])
+def get_date_slots(
+    current_user: User = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    """Return all upcoming one-time date slots for the teacher (IST today as cutoff)."""
+    today = datetime.now(IST).date()
+    return (
+        db.query(TeacherDateSlot)
+        .filter(
+            TeacherDateSlot.teacher_id == current_user.id,
+            TeacherDateSlot.is_active == True,
+            TeacherDateSlot.date >= today,
+        )
+        .order_by(TeacherDateSlot.date, TeacherDateSlot.start_time)
+        .all()
+    )
 
 
 # ── FCM token ─────────────────────────────────────────────────────────────────

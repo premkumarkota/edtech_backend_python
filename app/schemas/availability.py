@@ -58,6 +58,51 @@ class AvailabilityResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Teacher: one-time date slot ───────────────────────────────────────────────
+
+class DateSlotCreateRequest(BaseModel):
+    """Add a one-time availability window for a specific calendar date."""
+    date:               date
+    start_time:         time
+    end_time:           time
+    slot_duration_mins: int = 60
+
+    @field_validator("end_time")
+    @classmethod
+    def validate_end(cls, end: time, info) -> time:
+        start = info.data.get("start_time")
+        if start and end <= start:
+            raise ValueError(
+                f"End time ({end.strftime('%I:%M %p')} IST) must be after "
+                f"start time ({start.strftime('%I:%M %p')} IST)"
+            )
+        if start:
+            start_mins = start.hour * 60 + start.minute
+            end_mins = end.hour * 60 + end.minute
+            if end_mins - start_mins < 30:
+                raise ValueError("Time window must be at least 30 minutes")
+        return end
+
+    @field_validator("slot_duration_mins")
+    @classmethod
+    def validate_dur(cls, v: int) -> int:
+        if v < 15 or v > 480:
+            raise ValueError("slot_duration_mins must be between 15 and 480")
+        return v
+
+
+class DateSlotResponse(BaseModel):
+    id:                 int
+    teacher_id:         int
+    date:               date
+    start_time:         time
+    end_time:           time
+    slot_duration_mins: int
+    is_active:          bool
+
+    model_config = {"from_attributes": True}
+
+
 # ── Teacher: block a date ────────────────────────────────────────────────────
 
 class BlockDateRequest(BaseModel):

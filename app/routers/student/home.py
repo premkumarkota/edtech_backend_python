@@ -12,7 +12,7 @@ from app.models.user import User, UserRole
 from app.models.category import Category
 from app.models.teacher_profile import TeacherProfile, TeacherStatus
 from app.models.payout import TeacherRate
-from app.models.availability import TeacherAvailability, TeacherAvailabilityOverride
+from app.models.availability import TeacherAvailability, TeacherAvailabilityOverride, TeacherDateSlot
 from app.models.session import VideoCallSession, SessionStatus
 from app.schemas.student import HomeFeedResponse, TeacherCardResponse, TeacherDetailResponse
 from app.schemas.availability import TeacherSlotsResponse, TimeSlot, FcmTokenRequest
@@ -206,7 +206,14 @@ def get_teacher_slots(
         TeacherAvailability.is_active == True,
     ).all()
 
-    if not blocks:
+    # 3b. One-time date-specific slots for this exact date
+    date_slots = db.query(TeacherDateSlot).filter(
+        TeacherDateSlot.teacher_id == teacher_id,
+        TeacherDateSlot.date == date,
+        TeacherDateSlot.is_active == True,
+    ).all()
+
+    if not blocks and not date_slots:
         return TeacherSlotsResponse(teacher_id=teacher_id, date=date, slots=[])
 
     # 4. Collect already-booked session start times on this date
@@ -226,7 +233,7 @@ def get_teacher_slots(
         for s in booked_sessions
     }
 
-    # 5. Generate slots from each availability block
+    # 5. Generate slots from each recurring availability block
     slots: list[TimeSlot] = []
     for block in blocks:
         slot_start = datetime.combine(date, block.start_time)
@@ -243,6 +250,29 @@ def get_teacher_slots(
                 available=start_str not in booked_starts,
             ))
             slot_start = slot_end
+
+    # 6. Also generate slots from one-time date-specific entries
+    seen_starts = {s.start for s in slots}  # avoid duplicates with recurring
+    for ds in date_slots:
+        slot_start = datetime.combine(date, ds.start_time)
+        ds_end     = datetime.combine(date, ds.end_time)
+        delta      = timedelta(minutes=ds.slot_duration_mins)
+
+        while slot_start + delta <= ds_end:
+            slot_end  = slot_start + delta
+            start_str = slot_start.strftime("%H:%M")
+            end_str   = slot_end.strftime("%H:%M")
+            if start_str not in seen_starts:
+                slots.append(TimeSlot(
+                    start=start_str,
+                    end=end_str,
+                    available=start_str not in booked_starts,
+                ))
+                seen_starts.add(start_str)
+            slot_start = slot_end
+
+    # Sort slots by start time
+    slots.sort(key=lambda s: s.start)
 
     return TeacherSlotsResponse(teacher_id=teacher_id, date=date, slots=slots)
 
@@ -279,29 +309,42 @@ def get_teacher_available_dates(
         TeacherAvailability.teacher_id == teacher_id,
         TeacherAvailability.is_active == True,
     ).all()
-    if not active_blocks:
-        return {"teacher_id": teacher_id, "available_dates": []}
-
     working_weekdays = {b.day_of_week for b in active_blocks}  # set of 0-6
 
-    # Dates the teacher has blocked in this window
     today = datetime.now(IST).date()  # IST — GCP server runs UTC
     end_date = today + timedelta(days=days - 1)
+
+    # Dates the teacher has blocked in this window
     blocked_overrides = db.query(TeacherAvailabilityOverride).filter(
         TeacherAvailabilityOverride.teacher_id == teacher_id,
         TeacherAvailabilityOverride.date >= today,
         TeacherAvailabilityOverride.date <= end_date,
         TeacherAvailabilityOverride.is_blocked == True,
     ).all()
-    blocked_dates = {o.date for o in blocked_overrides}
+    blocked_set = {o.date for o in blocked_overrides}
+
+    # One-time date-specific slots in this window
+    specific_slots = db.query(TeacherDateSlot).filter(
+        TeacherDateSlot.teacher_id == teacher_id,
+        TeacherDateSlot.is_active == True,
+        TeacherDateSlot.date >= today,
+        TeacherDateSlot.date <= end_date,
+    ).all()
+    date_slot_dates = {s.date for s in specific_slots}
 
     available_dates = []
     for i in range(days):
         check_date = today + timedelta(days=i)
-        if check_date not in blocked_dates and check_date.weekday() in working_weekdays:
+        if check_date in blocked_set:
+            continue
+        if check_date.weekday() in working_weekdays or check_date in date_slot_dates:
             available_dates.append(str(check_date))
 
-    return {"teacher_id": teacher_id, "available_dates": available_dates}
+    return {
+        "teacher_id": teacher_id,
+        "available_dates": available_dates,
+        "blocked_dates": sorted([str(d) for d in blocked_set]),
+    }
 
 
 @router.put("/fcm-token")
