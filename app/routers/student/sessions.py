@@ -18,7 +18,7 @@ from app.models.user import User, UserRole
 from app.models.session import VideoCallSession, SessionStatus
 from app.models.instant_session import InstantSessionRequest, InstantSessionRequestStatus
 from app.models.teacher_profile import TeacherProfile, TeacherStatus
-from app.models.availability import TeacherAvailability, TeacherAvailabilityOverride
+from app.models.availability import TeacherAvailability, TeacherAvailabilityOverride, TeacherDateSlot
 from app.schemas.session import (
     BookSessionRequest, SessionResponse, JoinSessionResponse,
     CancelSessionRequest, CancelSessionResponse,
@@ -141,7 +141,8 @@ def _check_teacher_availability(
             detail="Teacher is not available on this date.",
         )
 
-    # 2. Check weekly schedule — slot must fit inside at least one block
+    # 2. Check weekly schedule AND one-time date slots — the requested time must
+    #    fit inside at least one recurring block OR one date-specific slot.
     day_of_week = local_date.weekday()  # 0=Mon … 6=Sun
     blocks = db.query(TeacherAvailability).filter(
         TeacherAvailability.teacher_id == teacher_id,
@@ -149,7 +150,13 @@ def _check_teacher_availability(
         TeacherAvailability.is_active == True,
     ).all()
 
-    if not blocks:
+    date_slots = db.query(TeacherDateSlot).filter(
+        TeacherDateSlot.teacher_id == teacher_id,
+        TeacherDateSlot.date == local_date,
+        TeacherDateSlot.is_active == True,
+    ).all()
+
+    if not blocks and not date_slots:
         raise HTTPException(
             status_code=400,
             detail="Teacher has no availability set for this day.",
@@ -158,6 +165,9 @@ def _check_teacher_availability(
     slot_fits = any(
         b.start_time <= local_time and slot_end_time <= b.end_time
         for b in blocks
+    ) or any(
+        ds.start_time <= local_time and slot_end_time <= ds.end_time
+        for ds in date_slots
     )
     if not slot_fits:
         raise HTTPException(
