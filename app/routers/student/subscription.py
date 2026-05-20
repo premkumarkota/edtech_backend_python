@@ -23,7 +23,8 @@ from app.schemas.subscription import (
 )
 from app.services.razorpay_service import create_razorpay_order, verify_payment_signature
 from app.services.subscription_service import (
-    get_active_subscription, activate_subscription, build_status_response
+    get_active_subscription, activate_subscription, build_status_response,
+    can_repurchase, REPURCHASE_THRESHOLD_MINS,
 )
 from app.config import settings
 
@@ -52,12 +53,18 @@ def create_subscription_order(
     Student selects a plan → we create a Razorpay order.
     Returns the order details for the Razorpay SDK in the app.
     """
-    # Guard: No already-active subscription
+    # Guard: block purchase only when the student still has plenty of minutes.
+    # If minutes_remaining <= REPURCHASE_THRESHOLD_MINS they may buy a new plan;
+    # remaining minutes will be carried forward on activation.
     existing = get_active_subscription(student.id, db)
-    if existing:
+    if existing and not can_repurchase(existing):
+        mins_left = existing.video_minutes_remaining
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You already have an active subscription.",
+            detail=(
+                f"You still have {mins_left} minutes on your current plan. "
+                f"You can top up when you have {REPURCHASE_THRESHOLD_MINS} minutes or fewer remaining."
+            ),
         )
 
     plan = db.query(SubscriptionPlan).filter(

@@ -9,11 +9,12 @@ from app.database import Base
 
 
 class SubscriptionStatus(str, enum.Enum):
-    PENDING   = "pending"
-    ACTIVE    = "active"
-    EXPIRED   = "expired"
-    CANCELLED = "cancelled"
-    FAILED    = "failed"
+    PENDING    = "pending"
+    ACTIVE     = "active"
+    SUPERSEDED = "superseded"   # replaced mid-cycle; remaining minutes carried forward
+    EXPIRED    = "expired"
+    CANCELLED  = "cancelled"
+    FAILED     = "failed"
 
 
 class SubscriptionPlan(Base):
@@ -71,6 +72,7 @@ class StudentSubscription(Base):
     mock_tests_used            = Column(Integer, nullable=False, default=0)
     video_call_minutes_total   = Column(Integer, nullable=False, default=0)
     video_call_minutes_used    = Column(Integer, nullable=False, default=0)
+    carried_over_minutes       = Column(Integer, nullable=False, default=0)  # audit: minutes rolled in from superseded plan
 
     # --- Razorpay References ---
     razorpay_order_id   = Column(String(100), unique=True, nullable=True)

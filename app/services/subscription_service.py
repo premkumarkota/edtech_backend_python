@@ -4,6 +4,12 @@ Core business logic for subscription lifecycle:
   - Activate subscription (idempotent — safe to call from both webhook + app callback)
   - Get active subscription for a student
   - Check entitlement gates (mock test, video call)
+
+Mid-cycle repurchase (carry-over) policy:
+  A student may buy a new plan when their remaining video minutes fall to or below
+  REPURCHASE_THRESHOLD_MINS. On activation the old plan is marked SUPERSEDED and its
+  remaining minutes are added to the new plan. The new plan's validity clock starts
+  from the purchase date — old remaining days are not transferred.
 """
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -16,6 +22,13 @@ from app.models.user import User
 from app.utils.fcm import notify_student_subscription_activated
 
 
+# ── Policy constant ────────────────────────────────────────────────────────────
+# When a student has ≤ this many minutes left they may purchase a new plan.
+REPURCHASE_THRESHOLD_MINS = 30
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def get_active_subscription(student_id: int, db: Session) -> Optional[StudentSubscription]:
     """Return the student's current active, non-expired subscription, or None."""
     return db.query(StudentSubscription).filter(
@@ -24,6 +37,19 @@ def get_active_subscription(student_id: int, db: Session) -> Optional[StudentSub
         StudentSubscription.expires_at > datetime.now(timezone.utc),
     ).first()
 
+
+def can_repurchase(existing: Optional[StudentSubscription]) -> bool:
+    """
+    True when the student is allowed to buy a new plan right now.
+    - No active subscription   → always allowed.
+    - Active subscription      → allowed only when minutes_remaining ≤ threshold.
+    """
+    if existing is None:
+        return True
+    return existing.video_minutes_remaining <= REPURCHASE_THRESHOLD_MINS
+
+
+# ── Activation ────────────────────────────────────────────────────────────────
 
 def activate_subscription(
     subscription_id: int,
@@ -37,8 +63,13 @@ def activate_subscription(
       (a) app verify-payment callback
       (b) Razorpay webhook (which may arrive seconds later)
 
-    Uses SELECT FOR UPDATE to prevent race conditions if both arrive simultaneously.
-    Returns the subscription if activated, None if already active (no-op).
+    Carry-over logic:
+      If the student had an active subscription with minutes remaining,
+      that plan is marked SUPERSEDED and its remaining minutes are added
+      to the new plan's total. The new plan's clock starts from NOW.
+
+    Uses SELECT FOR UPDATE to prevent race conditions.
+    Returns the activated subscription, or None if already active (no-op).
     """
     sub = (
         db.query(StudentSubscription)
@@ -46,7 +77,7 @@ def activate_subscription(
             StudentSubscription.id == subscription_id,
             StudentSubscription.status == SubscriptionStatus.PENDING.value,
         )
-        .with_for_update()   # Row-level lock
+        .with_for_update()
         .first()
     )
 
@@ -59,17 +90,28 @@ def activate_subscription(
     ).first()
 
     now = datetime.now(timezone.utc)
+
+    # ── Carry-over: supersede any existing active plan ─────────────────────────
+    old_sub = get_active_subscription(sub.student_id, db)
+    carried_over = 0
+    if old_sub and old_sub.id != sub.id:
+        carried_over = old_sub.video_minutes_remaining
+        old_sub.status = SubscriptionStatus.SUPERSEDED.value
+        # old_sub.expires_at left intact for audit purposes
+
+    # ── Activate new plan ──────────────────────────────────────────────────────
     sub.status      = SubscriptionStatus.ACTIVE.value
     sub.started_at  = now
     sub.expires_at  = now + timedelta(days=plan.validity_days)
     sub.amount_paid = plan.price
     sub.razorpay_payment_id = payment_id
 
-    # Snapshot entitlements from plan
+    # Snapshot entitlements + carry-over
     sub.mock_tests_allowed       = plan.mock_tests_allowed
-    sub.video_call_minutes_total = plan.video_call_minutes_per_month
+    sub.video_call_minutes_total = plan.video_call_minutes_per_month + carried_over
+    sub.carried_over_minutes     = carried_over
 
-    # Update the payment audit record
+    # ── Payment audit record ───────────────────────────────────────────────────
     payment = db.query(RazorpayPayment).filter(
         RazorpayPayment.razorpay_order_id == sub.razorpay_order_id
     ).first()
@@ -80,7 +122,7 @@ def activate_subscription(
     db.commit()
     db.refresh(sub)
 
-    # Send push notification to student — fire-and-forget, never block activation
+    # ── Push notification — fire-and-forget ────────────────────────────────────
     try:
         student = db.query(User).filter(User.id == sub.student_id).first()
         if student and student.fcm_token:
@@ -98,6 +140,8 @@ def activate_subscription(
     return sub
 
 
+# ── Failure ───────────────────────────────────────────────────────────────────
+
 def fail_subscription(razorpay_order_id: str, db: Session) -> None:
     """Mark a subscription as failed after a payment failure event."""
     sub = db.query(StudentSubscription).filter(
@@ -114,6 +158,8 @@ def fail_subscription(razorpay_order_id: str, db: Session) -> None:
             payment.status = "failed"
         db.commit()
 
+
+# ── Entitlement gates ─────────────────────────────────────────────────────────
 
 def require_active_subscription(student_id: int, db: Session) -> StudentSubscription:
     """Raise 403 if student doesn't have an active subscription."""
@@ -134,14 +180,15 @@ def require_video_minutes(student_id: int, db: Session) -> StudentSubscription:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your plan does not include video calls. Please upgrade.",
         )
-    remaining = sub.video_call_minutes_total - sub.video_call_minutes_used
-    if remaining <= 0:
+    if sub.video_minutes_remaining <= 0:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You have used all your video call minutes for this subscription period.",
+            detail="You have used all your video call minutes. Please top up your plan.",
         )
     return sub
 
+
+# ── Status response ───────────────────────────────────────────────────────────
 
 def build_status_response(student_id: int, db: Session) -> dict:
     """Build the full subscription status dict for the student."""
@@ -151,6 +198,7 @@ def build_status_response(student_id: int, db: Session) -> dict:
 
     days_remaining = (sub.expires_at - datetime.now(timezone.utc)).days if sub.expires_at else 0
     mock_remaining = None if sub.mock_tests_allowed == 0 else max(0, sub.mock_tests_allowed - sub.mock_tests_used)
+    minutes_remaining = sub.video_minutes_remaining
 
     plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == sub.plan_id).first()
 
@@ -165,5 +213,9 @@ def build_status_response(student_id: int, db: Session) -> dict:
         "mock_tests_remaining": mock_remaining,
         "video_call_minutes_total": sub.video_call_minutes_total,
         "video_call_minutes_used": sub.video_call_minutes_used,
-        "video_call_minutes_remaining": max(0, sub.video_call_minutes_total - sub.video_call_minutes_used),
+        "video_call_minutes_remaining": minutes_remaining,
+        "carried_over_minutes": sub.carried_over_minutes,
+        # Signal to the client whether the student is eligible to repurchase now
+        "can_repurchase": minutes_remaining <= REPURCHASE_THRESHOLD_MINS,
+        "repurchase_threshold": REPURCHASE_THRESHOLD_MINS,
     }
