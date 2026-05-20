@@ -236,6 +236,7 @@ def notify_student_instant_session_accepted(
             "type": "instant_session_accepted",
             "request_id": request_id,
             "session_id": session_id,
+            "teacher_name": teacher_name,  # used by Flutter to show caller name in call screen
         },
     )
 

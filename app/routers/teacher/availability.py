@@ -171,6 +171,23 @@ def update_instant_availability(
         raise HTTPException(status_code=403, detail="Only approved teachers can go available now.")
 
     now = datetime.now(timezone.utc)
+
+    # Auto-heal zombie sessions: if a session is still `in_progress` but its
+    # scheduled_at is more than 4 hours in the past, the teacher clearly left
+    # the call without pressing "End Meeting". Mark it no_show so it no longer
+    # blocks the Available Now toggle.
+    stale_cutoff = now - timedelta(hours=4)
+    stale_sessions = db.query(VideoCallSession).filter(
+        VideoCallSession.teacher_id == current_user.id,
+        VideoCallSession.status == SessionStatus.IN_PROGRESS.value,
+        VideoCallSession.scheduled_at < stale_cutoff,
+    ).all()
+    for s in stale_sessions:
+        s.status = SessionStatus.NO_SHOW.value
+        s.no_show_reason = "Session auto-closed: exceeded maximum allowed duration"
+    if stale_sessions:
+        db.commit()
+
     active_session = db.query(VideoCallSession).filter(
         VideoCallSession.teacher_id == current_user.id,
         VideoCallSession.status == SessionStatus.IN_PROGRESS.value,
