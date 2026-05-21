@@ -272,11 +272,13 @@ def book_session(
 
     # 6. Notify teacher via FCM (non-blocking — failure doesn't break booking)
     if teacher.fcm_token:
+        IST = timezone(timedelta(hours=5, minutes=30))
+        scheduled_ist = payload.scheduled_at.astimezone(IST)
         notify_teacher_session_booked(
             fcm_token=teacher.fcm_token,
             student_name=student.name or "A student",
-            session_date=payload.scheduled_at.strftime("%d %b %Y"),
-            session_time=payload.scheduled_at.strftime("%I:%M %p"),
+            session_date=scheduled_ist.strftime("%d %b %Y"),
+            session_time=scheduled_ist.strftime("%I:%M %p"),
             duration_mins=payload.duration_mins,
             session_id=session.id,
         )
@@ -510,11 +512,13 @@ def cancel_session(
     # Notify teacher
     teacher = db.query(User).filter(User.id == sess.teacher_id).first()
     if teacher and teacher.fcm_token:
+        IST = timezone(timedelta(hours=5, minutes=30))
+        scheduled_ist = sess.scheduled_at.astimezone(IST)
         notify_teacher_session_cancelled(
             fcm_token=teacher.fcm_token,
             student_name=student.name or "A student",
-            session_date=sess.scheduled_at.strftime("%d %b %Y"),
-            session_time=sess.scheduled_at.strftime("%I:%M %p"),
+            session_date=scheduled_ist.strftime("%d %b %Y"),
+            session_time=scheduled_ist.strftime("%I:%M %p"),
             session_id=sess.id,
         )
 
