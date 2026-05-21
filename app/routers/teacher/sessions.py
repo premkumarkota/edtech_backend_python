@@ -359,11 +359,13 @@ def cancel_session(
 
     student = db.query(User).filter(User.id == sess.student_id).first()
     if student and student.fcm_token:
+        IST = timezone(timedelta(hours=5, minutes=30))
+        scheduled_ist = sess.scheduled_at.astimezone(IST)
         notify_student_session_cancelled(
             fcm_token=student.fcm_token,
             teacher_name=teacher.name or "Your tutor",
-            session_date=sess.scheduled_at.strftime("%d %b %Y"),
-            session_time=sess.scheduled_at.strftime("%I:%M %p"),
+            session_date=scheduled_ist.strftime("%d %b %Y"),
+            session_time=scheduled_ist.strftime("%I:%M %p"),
             session_id=sess.id,
         )
 
