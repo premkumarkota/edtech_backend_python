@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     # Firebase & Storage
     FIREBASE_SERVICE_ACCOUNT_PATH: Optional[str] = None
+    FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None  # raw JSON string (for Cloud Run)
     GCP_BUCKET_NAME: Optional[str] = None
     GCP_PROJECT_ID: Optional[str] = "edtech-107e3"
 
