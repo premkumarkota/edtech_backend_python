@@ -38,6 +38,9 @@ def send_push(
         return False
 
     try:
+        from app.utils.firebase import init_firebase
+        init_firebase()
+
         import firebase_admin.messaging as fcm_messaging
 
         message = fcm_messaging.Message(
