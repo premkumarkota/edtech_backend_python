@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List
+from typing import List, Optional
 from datetime import datetime, timezone
 
 from app.database import get_db
@@ -19,15 +19,17 @@ router = APIRouter()
 def list_quizzes(
     syllabus_id: int = None,
     chapter_id: int = None,
-    student: User = Depends(require_student), 
+    category_id: Optional[int] = Query(None, description="Browse a different category"),
+    student: User = Depends(require_student),
     db: Session = Depends(get_db)
 ):
-    """List all published quizzes for the student's category with optional Subject/Chapter filters."""
-    if not student.category_id:
+    """List all published quizzes for a category with optional Subject/Chapter filters."""
+    effective_category_id = category_id or student.category_id
+    if not effective_category_id:
         raise HTTPException(status_code=400, detail="Complete onboarding first.")
 
     query = db.query(Quiz).filter(
-        Quiz.category_id == student.category_id, 
+        Quiz.category_id == effective_category_id,
         Quiz.status == QuizStatus.PUBLISHED
     )
     
@@ -58,7 +60,6 @@ def get_quiz(quiz_id: int, student: User = Depends(require_student), db: Session
     """Get quiz details and questions (without correct answers)."""
     quiz = db.query(Quiz).filter(
         Quiz.id == quiz_id,
-        Quiz.category_id == student.category_id,
         Quiz.status == QuizStatus.PUBLISHED
     ).first()
     if not quiz:
