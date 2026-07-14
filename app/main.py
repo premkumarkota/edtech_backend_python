@@ -15,7 +15,7 @@ from app.routers.teacher import auth as teacher_auth
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="EdTech LMS API",
+    title="Learning git",
     description="Learning Management System — Admin, Student & Teacher APIs",
     version="2.0.0",
 )
