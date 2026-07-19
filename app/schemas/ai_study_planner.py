@@ -42,10 +42,20 @@ class AiChatMessageResponse(BaseModel):
         from_attributes = True
 
 
+class AiSmartAction(BaseModel):
+    """A tappable action button rendered below an AI message."""
+    type: str  # "quiz", "lesson", "session", "navigate"
+    label: str
+    route: str  # Flutter named route e.g. "/quiz-take"
+    args: Optional[dict] = None  # route arguments e.g. {"quizId": 5}
+    icon: str = "default"  # icon key for frontend icon mapping
+
+
 class AiChatResponse(BaseModel):
     """Response from AI chat — the assistant's reply."""
     reply: str
     message_id: int
+    actions: List[AiSmartAction] = []
     metadata: Optional[dict] = None  # deep links, suggested actions
 
 

@@ -6,7 +6,7 @@ from app.database import get_db
 from app.dependencies import get_current_admin
 from app.models.user import User
 from app.models.category import Category
-from app.schemas.category import CategoryCreate, CategoryResponse
+from app.schemas.category import CategoryCreate, CategoryUpdate, CategoryResponse
 
 router = APIRouter()
 
@@ -26,6 +26,27 @@ def create_category(
     db.commit()
     db.refresh(new_cat)
     return new_cat
+
+@router.put("/{category_id}", response_model=CategoryResponse)
+def update_category(
+    category_id: int,
+    payload: CategoryUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    cat = db.query(Category).filter(Category.id == category_id).first()
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+    if payload.name is not None and payload.name != cat.name:
+        existing = db.query(Category).filter(Category.name == payload.name).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Category with this name already exists")
+        cat.name = payload.name
+    if payload.image_url is not None:
+        cat.image_url = payload.image_url
+    db.commit()
+    db.refresh(cat)
+    return cat
 
 @router.delete("/{category_id}")
 def delete_category(

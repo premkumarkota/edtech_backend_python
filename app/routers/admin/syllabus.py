@@ -95,6 +95,32 @@ def get_syllabus_detail(
         raise HTTPException(status_code=404, detail="Syllabus not found")
     return syllabus_to_detail_with_layout(s)
 
+@router.put("/{syllabus_id}", response_model=SyllabusSummary)
+async def update_syllabus(
+    syllabus_id: int,
+    category_id: Optional[int] = Form(None),
+    title: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    thumbnail: Optional[UploadFile] = File(None),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    syllabus = db.query(Syllabus).filter(Syllabus.id == syllabus_id).first()
+    if not syllabus:
+        raise HTTPException(status_code=404, detail="Syllabus not found")
+    if category_id is not None:
+        syllabus.category_id = category_id
+    if title is not None:
+        syllabus.title = title
+    if description is not None:
+        syllabus.description = description
+    if thumbnail:
+        thumbnail_url = await upload_file(thumbnail, folder=f"syllabus/thumbnails")
+        syllabus.thumbnail_url = thumbnail_url
+    db.commit()
+    db.refresh(syllabus)
+    return syllabus
+
 @router.delete("/{syllabus_id}")
 def delete_syllabus(syllabus_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     s = db.query(Syllabus).filter(Syllabus.id == syllabus_id).first()

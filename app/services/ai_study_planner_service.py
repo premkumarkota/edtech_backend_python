@@ -6,6 +6,7 @@ and generates personalized study plans and chat responses via LLM.
 """
 import logging
 import json
+import re
 from datetime import date, datetime, timezone
 from typing import Optional
 
@@ -264,3 +265,139 @@ Subscription minutes remaining: {context['subscription']['minutes_remaining'] if
         }
 
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Smart Action Extraction
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Intent keywords → (label, route, icon, args_factory)
+_INTENT_MAP = [
+    (r"\b(quiz|quizzes|test|mock|exam|assess|practice)\b",
+     "Browse All Quizzes", "/available-tests", "quiz", None),
+    (r"\b(learn|study|subject|subjects|lesson|lessons|chapter|syllabus|something new)\b",
+     "Explore Subjects", "/learn", "book", None),
+    (r"\b(tutor|mentor|teacher|book.?session)\b",
+     "Find a Tutor", "/sessions", "video-call", None),
+    (r"\b(plan|schedule|today.?s?\s*plan)\b",
+     "View Today's Plan", "/ai-planner", "planner", {"tab": "plan"}),
+    (r"\b(subscri|premium|upgrade|pricing|pro\b)",
+     "View Plans", "/subscription", "crown", None),
+    (r"\b(leaderboard|ranking|rank|top\s*students)\b",
+     "View Leaderboard", "/rankings", "prize", None),
+    (r"\b(result|score|how\s*did\s*i|my\s*score|attempt)\b",
+     "View My Results", "/rankings", "prize", None),
+    (r"\b(session|upcoming|my\s*session|join)\b",
+     "My Sessions", "/sessions", "calendar", None),
+    (r"\b(profile|my\s*profile|update\s*details|edit\s*profile)\b",
+     "My Profile", "/profile", "user", None),
+    (r"\b(setting|preference|reminder|study\s*time)\b",
+     "AI Settings", "/ai-preferences", "settings", None),
+    (r"\b(notification|alert)\b",
+     "Notifications", "/notifications", "bell", None),
+    (r"\b(video|watch|lecture)\b",
+     "Watch Lessons", "/lesson-contents", "video", None),
+    (r"\b(progress|how\s*am\s*i\s*doing|my\s*stats)\b",
+     "View Progress", "/rankings", "chart", None),
+    (r"\b(home|go\s*back|dashboard)\b",
+     "Go Home", "/dashboard", "home", None),
+]
+
+
+def _truncate_label(text: str, max_len: int = 40) -> str:
+    """Shorten a label for action chip display."""
+    text = re.sub(r"\*+", "", text).strip()
+    text = re.split(r"\s+(?:to|for|and|—|-)\s+", text, maxsplit=1)[0].strip()
+    if len(text) > max_len:
+        text = text[:max_len - 1].rstrip() + "…"
+    return text
+
+
+def extract_smart_actions(
+    ai_reply: str,
+    user_message: str,
+    db: Session,
+    student: User,
+) -> list[dict]:
+    """
+    Parse AI reply for [quiz:ID], [lesson:ID], [session] references,
+    validate IDs exist in DB, and add intent-based navigation actions.
+    Returns list of action dicts (max 3).
+    """
+    actions: list[dict] = []
+    seen_routes: set[str] = set()
+
+    def add(action: dict):
+        if len(actions) >= 3:
+            return
+        key = f"{action['route']}:{action.get('args', {}).get('quizId', '')}:{action.get('args', {}).get('syllabusId', '')}"
+        if key in seen_routes:
+            return
+        seen_routes.add(key)
+        actions.append(action)
+
+    # 1. Parse [quiz:ID] — validate quiz exists
+    for m in re.finditer(r"\[quiz:(\d+)\]\s*([^\n\[]*)", ai_reply):
+        quiz_id = int(m.group(1))
+        quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
+        if quiz:
+            label = _truncate_label(m.group(2)) or quiz.title
+            add({
+                "type": "quiz",
+                "label": f"Start: {label}",
+                "route": "/quiz-take",
+                "args": {"quizId": quiz_id},
+                "icon": "quiz",
+            })
+
+    # 2. Parse [lesson:ID] — validate syllabus exists
+    for m in re.finditer(r"\[lesson:(\d+)\]\s*([^\n\[]*)", ai_reply):
+        lesson_id = int(m.group(1))
+        syllabus = db.query(Syllabus).filter(Syllabus.id == lesson_id).first()
+        if syllabus:
+            label = _truncate_label(m.group(2)) or syllabus.title
+            add({
+                "type": "lesson",
+                "label": f"Open: {label}",
+                "route": "/course-content",
+                "args": {"syllabusId": lesson_id, "title": label},
+                "icon": "book",
+            })
+
+    # 3. Parse [session] — book a session
+    if "[session]" in ai_reply:
+        add({
+            "type": "session",
+            "label": "Book a Session",
+            "route": "/sessions",
+            "args": {},
+            "icon": "video-call",
+        })
+
+    # 4. Intent-based actions from user message + AI reply (fill remaining slots)
+    intent_source = f"{user_message} {ai_reply}".lower()
+
+    for pattern, label, route, icon, args in _INTENT_MAP:
+        if len(actions) >= 3:
+            break
+        if re.search(pattern, intent_source, re.IGNORECASE):
+            # Don't duplicate if we already have a parsed action for same route
+            if any(a["route"] == route for a in actions):
+                continue
+            add({
+                "type": "navigate",
+                "label": label,
+                "route": route,
+                "args": args or {},
+                "icon": icon,
+            })
+
+    return actions
+
+
+def clean_ai_reply(reply: str) -> str:
+    """Strip [type:id] markers from the AI reply for clean display."""
+    reply = re.sub(r"\[quiz:\d+\]\s*", "", reply)
+    reply = re.sub(r"\[lesson:\d+\]\s*", "", reply)
+    reply = re.sub(r"\[session\]\s*", "", reply)
+    return reply.strip()

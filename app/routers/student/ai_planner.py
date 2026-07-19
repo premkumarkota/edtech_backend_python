@@ -26,8 +26,12 @@ from app.schemas.ai_study_planner import (
     AiChatRequest, AiChatResponse, AiChatMessageResponse,
     AiPreferencesRequest, AiPreferencesResponse,
     AiStudyPlanResponse, StudyPlanTask, TaskCompleteRequest,
+    AiSmartAction,
 )
-from app.services.ai_study_planner_service import generate_chat_response, generate_daily_plan
+from app.services.ai_study_planner_service import (
+    generate_chat_response, generate_daily_plan,
+    extract_smart_actions, clean_ai_reply,
+)
 
 router = APIRouter()
 
@@ -87,9 +91,21 @@ def send_chat_message(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"AI chat error: {str(e)}")
 
+    # Extract smart actions from AI reply + user intent
+    smart_actions = extract_smart_actions(
+        ai_reply=ai_reply,
+        user_message=payload.message,
+        db=db,
+        student=student,
+    )
+
+    # Clean [type:id] markers from the display text
+    clean_reply = clean_ai_reply(ai_reply)
+
     return AiChatResponse(
-        reply=ai_reply,
+        reply=clean_reply,
         message_id=assistant_msg.id,
+        actions=[AiSmartAction(**a) for a in smart_actions],
         metadata=assistant_msg.metadata_json,
     )
 

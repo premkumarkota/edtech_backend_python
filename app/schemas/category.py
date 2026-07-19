@@ -10,6 +10,10 @@ class CategoryBase(BaseModel):
 class CategoryCreate(CategoryBase):
     pass
 
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    image_url: Optional[str] = None
+
 class CategoryResponse(CategoryBase):
     id: int
     is_active: bool
