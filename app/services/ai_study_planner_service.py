@@ -57,7 +57,7 @@ def _collect_student_context(student: User, db: Session) -> dict:
     attempts = (
         db.query(QuizAttempt)
         .filter(QuizAttempt.student_id == student.id)
-        .order_by(QuizAttempt.created_at.desc())
+        .order_by(QuizAttempt.started_at.desc())
         .limit(10)
         .all()
     )
@@ -68,7 +68,7 @@ def _collect_student_context(student: User, db: Session) -> dict:
             "quiz_title": quiz.title if quiz else "Unknown",
             "score_pct": round((a.score / a.total_marks * 100) if a.total_marks else 0, 1),
             "status": a.status,
-            "date": str(a.created_at.date()) if a.created_at else "",
+            "date": str(a.started_at.date()) if a.started_at else "",
         })
 
     # 3. Available quizzes (not yet attempted)
