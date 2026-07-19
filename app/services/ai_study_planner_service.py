@@ -84,7 +84,7 @@ def _collect_student_context(student: User, db: Session) -> dict:
         .all()
     )
     context["available_quizzes"] = [
-        {"id": q.id, "title": q.title, "duration_mins": q.duration_minutes}
+        {"id": q.id, "title": q.title, "duration_mins": q.duration_mins}
         for q in available_quizzes
     ]
 
