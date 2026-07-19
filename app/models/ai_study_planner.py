@@ -38,12 +38,28 @@ class ChatRole(str, enum.Enum):
     ASSISTANT = "assistant"
 
 
+class AiChatConversation(Base):
+    """A conversation (session) grouping AI chat messages."""
+    __tablename__ = "ai_chat_conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(100), default="New Chat")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    student = relationship("User", foreign_keys=[student_id])
+    messages = relationship("AiChatMessage", back_populates="conversation", cascade="all, delete-orphan")
+
+
 class AiChatMessage(Base):
     """Individual chat messages between student and AI planner."""
     __tablename__ = "ai_chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    conversation_id = Column(Integer, ForeignKey("ai_chat_conversations.id", ondelete="CASCADE"), nullable=True)
     role = Column(String(20), nullable=False)  # "user" or "assistant"
     content = Column(Text, nullable=False)
     metadata_json = Column(JSON, default=dict)  # deep links, plan refs, etc.
@@ -51,6 +67,7 @@ class AiChatMessage(Base):
 
     # Relationships
     student = relationship("User", foreign_keys=[student_id])
+    conversation = relationship("AiChatConversation", back_populates="messages")
 
 
 class AiStudyPlan(Base):

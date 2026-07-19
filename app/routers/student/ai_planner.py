@@ -21,12 +21,12 @@ logger = logging.getLogger(__name__)
 from app.database import get_db
 from app.dependencies.auth import get_onboarded_student
 from app.models.user import User
-from app.models.ai_study_planner import AiChatMessage, AiStudyPlan, AiStudentPreference, ChatRole
+from app.models.ai_study_planner import AiChatMessage, AiChatConversation, AiStudyPlan, AiStudentPreference, ChatRole
 from app.schemas.ai_study_planner import (
     AiChatRequest, AiChatResponse, AiChatMessageResponse,
     AiPreferencesRequest, AiPreferencesResponse,
     AiStudyPlanResponse, StudyPlanTask, TaskCompleteRequest,
-    AiSmartAction,
+    AiSmartAction, AiConversationResponse,
 )
 from app.services.ai_study_planner_service import (
     generate_chat_response, generate_daily_plan,
@@ -46,19 +46,39 @@ def send_chat_message(
 ):
     """Send a message to the AI study planner and get a response."""
     try:
+        # Resolve or create conversation
+        if payload.conversation_id:
+            conversation = db.query(AiChatConversation).filter(
+                AiChatConversation.id == payload.conversation_id,
+                AiChatConversation.student_id == student.id,
+            ).first()
+            if not conversation:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+        else:
+            title = payload.message[:40].strip()
+            if len(payload.message) > 40:
+                title += "..."
+            conversation = AiChatConversation(student_id=student.id, title=title)
+            db.add(conversation)
+            db.flush()
+
         # Save user message
         user_msg = AiChatMessage(
             student_id=student.id,
+            conversation_id=conversation.id,
             role=ChatRole.USER.value,
             content=payload.message,
         )
         db.add(user_msg)
         db.flush()
 
-        # Get recent chat history for context
+        # Get recent chat history for context (scoped to conversation)
         recent_messages = (
             db.query(AiChatMessage)
-            .filter(AiChatMessage.student_id == student.id)
+            .filter(
+                AiChatMessage.student_id == student.id,
+                AiChatMessage.conversation_id == conversation.id,
+            )
             .order_by(AiChatMessage.created_at.desc())
             .limit(10)
             .all()
@@ -79,13 +99,17 @@ def send_chat_message(
         # Save assistant message
         assistant_msg = AiChatMessage(
             student_id=student.id,
+            conversation_id=conversation.id,
             role=ChatRole.ASSISTANT.value,
             content=ai_reply,
         )
         db.add(assistant_msg)
+        conversation.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(assistant_msg)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"AI chat error: {e}", exc_info=True)
         db.rollback()
@@ -105,6 +129,7 @@ def send_chat_message(
     return AiChatResponse(
         reply=clean_reply,
         message_id=assistant_msg.id,
+        conversation_id=conversation.id,
         actions=[AiSmartAction(**a) for a in smart_actions],
         metadata=assistant_msg.metadata_json,
     )
@@ -121,6 +146,47 @@ def get_chat_history(
         .filter(AiChatMessage.student_id == student.id)
         .order_by(AiChatMessage.created_at.asc())
         .limit(50)
+        .all()
+    )
+    return [AiChatMessageResponse.model_validate(m) for m in messages]
+
+
+# ── Conversations ────────────────────────────────────────────────────────────
+
+@router.get("/conversations", response_model=list[AiConversationResponse])
+def list_conversations(
+    student: User = Depends(get_onboarded_student),
+    db: Session = Depends(get_db),
+):
+    """List student's recent chat conversations (last 30, newest first)."""
+    conversations = (
+        db.query(AiChatConversation)
+        .filter(AiChatConversation.student_id == student.id)
+        .order_by(AiChatConversation.updated_at.desc())
+        .limit(30)
+        .all()
+    )
+    return [AiConversationResponse.model_validate(c) for c in conversations]
+
+
+@router.get("/conversations/{conversation_id}/messages", response_model=list[AiChatMessageResponse])
+def get_conversation_messages(
+    conversation_id: int,
+    student: User = Depends(get_onboarded_student),
+    db: Session = Depends(get_db),
+):
+    """Get all messages for a specific conversation."""
+    conversation = db.query(AiChatConversation).filter(
+        AiChatConversation.id == conversation_id,
+        AiChatConversation.student_id == student.id,
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    messages = (
+        db.query(AiChatMessage)
+        .filter(AiChatMessage.conversation_id == conversation_id)
+        .order_by(AiChatMessage.created_at.asc())
         .all()
     )
     return [AiChatMessageResponse.model_validate(m) for m in messages]

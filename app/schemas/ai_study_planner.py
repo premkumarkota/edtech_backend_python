@@ -29,6 +29,7 @@ class AiPreferencesResponse(BaseModel):
 
 class AiChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
+    conversation_id: Optional[int] = None
 
 
 class AiChatMessageResponse(BaseModel):
@@ -55,8 +56,19 @@ class AiChatResponse(BaseModel):
     """Response from AI chat — the assistant's reply."""
     reply: str
     message_id: int
+    conversation_id: int
     actions: List[AiSmartAction] = []
     metadata: Optional[dict] = None  # deep links, suggested actions
+
+
+class AiConversationResponse(BaseModel):
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 # ── Study Plan ───────────────────────────────────────────────────────────────
