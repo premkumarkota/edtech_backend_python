@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     AGORA_APP_ID: str = ""
     AGORA_APP_CERTIFICATE: str = ""
 
+    # AI / LLM (Azure OpenAI or OpenAI-compatible)
+    LLM_BASE_URL: str = ""       # e.g. "https://your-resource.openai.azure.com" or "https://api.openai.com/v1"
+    LLM_API_KEY: str = ""
+    LLM_MODEL: str = "gpt-4o-mini"  # Azure deployment name or OpenAI model ID
+    LLM_API_VERSION: str = "2024-08-01-preview"  # Azure-only, ignored for OpenAI
+
     # App — override with DEBUG=true in .env.dev for local development
     DEBUG: bool = False
 

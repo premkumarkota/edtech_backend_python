@@ -30,6 +30,9 @@ from app.models.availability import (                          # Depends on User
 from app.models.withdrawal import (                            # Depends on User
     TeacherBankDetails, WithdrawalRequest
 )
+from app.models.ai_study_planner import (                      # Depends on User
+    AiStudentPreference, AiChatMessage, AiStudyPlan, ChatRole
+)
 
 __all__ = [
     # Core
@@ -51,4 +54,6 @@ __all__ = [
     "TeacherAvailability", "TeacherAvailabilityOverride",
     # Withdrawal
     "TeacherBankDetails", "WithdrawalRequest",
+    # AI Study Planner
+    "AiStudentPreference", "AiChatMessage", "AiStudyPlan", "ChatRole",
 ]

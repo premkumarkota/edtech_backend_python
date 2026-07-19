@@ -56,7 +56,9 @@ from app.routers.teacher import home as teacher_home
 from app.routers.teacher import sessions as teacher_sessions
 from app.routers.teacher import withdrawals as teacher_withdrawals
 from app.routers.payments import router as payments_webhook
+from app.routers.student import ai_planner as student_ai_planner
 from app.services.reminder_scheduler import start_scheduler, stop_scheduler
+from app.services.ai_plan_scheduler import start_ai_plan_scheduler, stop_ai_plan_scheduler
 
 
 # ── Lifespan (startup / shutdown) ────────────────────────────────────────────
@@ -69,7 +71,9 @@ async def lifespan(app: FastAPI):
         print(f"WARNING: DB error on startup: {e}")
 
     start_scheduler()
+    start_ai_plan_scheduler()
     yield
+    stop_ai_plan_scheduler()
     stop_scheduler()
 
 
@@ -202,6 +206,10 @@ app.include_router(student_subscription.router,
 app.include_router(student_sessions.router,
                    prefix="/api/student/sessions",
                    tags=["Student - Video Call Sessions"])
+
+app.include_router(student_ai_planner.router,
+                   prefix="/api/student/ai",
+                   tags=["Student - AI Study Planner"])
 
 app.include_router(student_profile.router,
                    prefix="/api/student/profile",
