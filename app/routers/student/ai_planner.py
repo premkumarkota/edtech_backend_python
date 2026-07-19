@@ -10,10 +10,13 @@ Endpoints:
     GET  /preferences    — Get current preferences
     POST /plan/task-complete — Mark a task as completed
 """
+import logging
 from datetime import date, datetime, timezone, time as dt_time
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.database import get_db
 from app.dependencies.auth import get_onboarded_student
@@ -38,45 +41,51 @@ def send_chat_message(
     db: Session = Depends(get_db),
 ):
     """Send a message to the AI study planner and get a response."""
-    # Save user message
-    user_msg = AiChatMessage(
-        student_id=student.id,
-        role=ChatRole.USER.value,
-        content=payload.message,
-    )
-    db.add(user_msg)
-    db.flush()
+    try:
+        # Save user message
+        user_msg = AiChatMessage(
+            student_id=student.id,
+            role=ChatRole.USER.value,
+            content=payload.message,
+        )
+        db.add(user_msg)
+        db.flush()
 
-    # Get recent chat history for context
-    recent_messages = (
-        db.query(AiChatMessage)
-        .filter(AiChatMessage.student_id == student.id)
-        .order_by(AiChatMessage.created_at.desc())
-        .limit(10)
-        .all()
-    )
-    chat_history = [
-        {"role": msg.role, "content": msg.content}
-        for msg in reversed(recent_messages)
-    ]
+        # Get recent chat history for context
+        recent_messages = (
+            db.query(AiChatMessage)
+            .filter(AiChatMessage.student_id == student.id)
+            .order_by(AiChatMessage.created_at.desc())
+            .limit(10)
+            .all()
+        )
+        chat_history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in reversed(recent_messages)
+        ]
 
-    # Generate AI response
-    ai_reply = generate_chat_response(
-        student=student,
-        user_message=payload.message,
-        db=db,
-        chat_history=chat_history,
-    )
+        # Generate AI response
+        ai_reply = generate_chat_response(
+            student=student,
+            user_message=payload.message,
+            db=db,
+            chat_history=chat_history,
+        )
 
-    # Save assistant message
-    assistant_msg = AiChatMessage(
-        student_id=student.id,
-        role=ChatRole.ASSISTANT.value,
-        content=ai_reply,
-    )
-    db.add(assistant_msg)
-    db.commit()
-    db.refresh(assistant_msg)
+        # Save assistant message
+        assistant_msg = AiChatMessage(
+            student_id=student.id,
+            role=ChatRole.ASSISTANT.value,
+            content=ai_reply,
+        )
+        db.add(assistant_msg)
+        db.commit()
+        db.refresh(assistant_msg)
+
+    except Exception as e:
+        logger.error(f"AI chat error: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"AI chat error: {str(e)}")
 
     return AiChatResponse(
         reply=ai_reply,

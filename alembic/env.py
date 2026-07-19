@@ -1,3 +1,9 @@
+"""
+Alembic Environment Configuration.
+
+This file is executed every time you run an alembic command.
+It connects to the database and runs migrations.
+"""
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -9,9 +15,9 @@ from alembic import context
 from app.config import settings
 from app.database import Base, engine
 
-# Import ALL models so Alembic can detect them
-from app.models.user import User
-from app.models.category import Category
+# ── Import ALL models so Alembic can detect them for autogenerate ──
+# This single import pulls in every model via app/models/__init__.py
+from app.models import *  # noqa: F401, F403
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

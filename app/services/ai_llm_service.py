@@ -57,13 +57,22 @@ def chat_completion(
 
     # Azure OpenAI uses: {base_url}/openai/deployments/{model}/chat/completions?api-version=...
     # Standard OpenAI uses: {base_url}/chat/completions
-    # We detect Azure by checking if base_url contains "openai.azure.com"
-    is_azure = "openai.azure.com" in base_url or "cognitiveservices.azure.com" in base_url
+    # Detect Azure by checking common Azure domain patterns
+    is_azure = any(domain in base_url for domain in [
+        "openai.azure.com",
+        "cognitiveservices.azure.com",
+        "services.ai.azure.com",
+        ".azure.com",
+    ])
 
     if is_azure:
-        # Azure OpenAI format
-        api_version = getattr(settings, "LLM_API_VERSION", "2024-08-01-preview")
-        url = f"{base_url}/openai/deployments/{config['model']}/chat/completions?api-version={api_version}"
+        # Azure OpenAI / Azure AI format
+        api_version = getattr(settings, "LLM_API_VERSION", "2024-12-01-preview")
+        # If URL already contains /openai/, don't add it again
+        if "/openai/" in base_url:
+            url = f"{base_url}/deployments/{config['model']}/chat/completions?api-version={api_version}"
+        else:
+            url = f"{base_url}/openai/deployments/{config['model']}/chat/completions?api-version={api_version}"
         headers = {
             "Content-Type": "application/json",
             "api-key": config["api_key"],
@@ -75,6 +84,8 @@ def chat_completion(
             "Content-Type": "application/json",
             "Authorization": f"Bearer {config['api_key']}",
         }
+
+    logger.info(f"LLM request: is_azure={is_azure}, url={url[:80]}...")
 
     payload = {
         "messages": messages,
