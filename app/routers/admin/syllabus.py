@@ -25,6 +25,7 @@ from app.services.syllabus_layout import syllabus_to_detail_with_layout, chapter
 from app.services.storage_service import (
     upload_file,
     ALLOWED_DOCUMENT_TYPES,
+    ALLOWED_IMAGE_TYPES,
     ALLOWED_VIDEO_TYPES,
     SYLLABUS_CONTENT_MAX_DOC_MB,
     SYLLABUS_CONTENT_MAX_VIDEO_MB,
@@ -44,7 +45,12 @@ async def create_syllabus(
 ):
     thumbnail_url = None
     if thumbnail:
-        thumbnail_url = await upload_file(thumbnail, folder=f"syllabus/thumbnails")
+        thumbnail_url = await upload_file(
+            thumbnail,
+            folder="syllabus/thumbnails",
+            allowed_types=ALLOWED_IMAGE_TYPES,
+            max_size_mb=5,
+        )
 
     syllabus = Syllabus(
         category_id=category_id,
@@ -115,7 +121,12 @@ async def update_syllabus(
     if description is not None:
         syllabus.description = description
     if thumbnail:
-        thumbnail_url = await upload_file(thumbnail, folder=f"syllabus/thumbnails")
+        thumbnail_url = await upload_file(
+            thumbnail,
+            folder="syllabus/thumbnails",
+            allowed_types=ALLOWED_IMAGE_TYPES,
+            max_size_mb=5,
+        )
         syllabus.thumbnail_url = thumbnail_url
     db.commit()
     db.refresh(syllabus)

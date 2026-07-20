@@ -151,7 +151,14 @@ async def _upload_gcp(contents: bytes, path: str, content_type: str) -> str:
 
     bucket = client.bucket(settings.GCP_BUCKET_NAME)
     blob = bucket.blob(path)
+    blob.cache_control = "public, max-age=3600"
     blob.upload_from_string(contents, content_type=content_type)
+    # Prefer public URL for category/syllabus images shown in admin + apps.
+    # With uniform bucket-level access this is a no-op / may raise — ignore safely.
+    try:
+        blob.make_public()
+    except Exception:
+        pass
     return blob.public_url
 
 

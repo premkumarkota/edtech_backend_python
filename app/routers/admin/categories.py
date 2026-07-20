@@ -7,7 +7,7 @@ from app.dependencies import get_current_admin
 from app.models.user import User
 from app.models.category import Category
 from app.schemas.category import CategoryResponse
-from app.services.storage_service import upload_file
+from app.services.storage_service import upload_file, ALLOWED_IMAGE_TYPES
 
 router = APIRouter()
 
@@ -25,7 +25,12 @@ async def create_category(
 
     image_url = None
     if image:
-        image_url = await upload_file(image, folder="categories")
+        image_url = await upload_file(
+            image,
+            folder="categories",
+            allowed_types=ALLOWED_IMAGE_TYPES,
+            max_size_mb=5,
+        )
 
     new_cat = Category(name=name, image_url=image_url)
     db.add(new_cat)
@@ -51,7 +56,12 @@ async def update_category(
             raise HTTPException(status_code=400, detail="Category with this name already exists")
         cat.name = name
     if image:
-        cat.image_url = await upload_file(image, folder="categories")
+        cat.image_url = await upload_file(
+            image,
+            folder="categories",
+            allowed_types=ALLOWED_IMAGE_TYPES,
+            max_size_mb=5,
+        )
     db.commit()
     db.refresh(cat)
     return cat
