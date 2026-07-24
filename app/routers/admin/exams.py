@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies.auth import get_admin_user
+from app.dependencies.auth import get_current_admin
 from app.models.user import User
 from app.models.syllabus import Syllabus
 from app.models.study_planner_v2 import GoalExam, GoalExamSubject
@@ -24,7 +24,7 @@ router = APIRouter()
 
 @router.get("/", response_model=list[ExamResponse])
 def list_exams(
-    admin: User = Depends(get_admin_user),
+    admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """List all exams (including inactive)."""
@@ -51,7 +51,7 @@ def list_exams(
 @router.post("/", response_model=ExamResponse)
 def create_exam(
     payload: ExamCreateRequest,
-    admin: User = Depends(get_admin_user),
+    admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Create a new exam template."""
@@ -83,7 +83,7 @@ def create_exam(
 def update_exam(
     exam_id: int,
     payload: ExamUpdateRequest,
-    admin: User = Depends(get_admin_user),
+    admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Update an exam template."""
@@ -125,7 +125,7 @@ def update_exam(
 @router.delete("/{exam_id}")
 def archive_exam(
     exam_id: int,
-    admin: User = Depends(get_admin_user),
+    admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Soft-delete (deactivate) an exam."""
@@ -142,7 +142,7 @@ def archive_exam(
 def add_subject_to_exam(
     exam_id: int,
     payload: ExamSubjectMapRequest,
-    admin: User = Depends(get_admin_user),
+    admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Map a syllabus subject to an exam."""
@@ -177,7 +177,7 @@ def add_subject_to_exam(
 def remove_subject_from_exam(
     exam_id: int,
     syllabus_id: int,
-    admin: User = Depends(get_admin_user),
+    admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     """Remove a subject mapping from an exam."""
