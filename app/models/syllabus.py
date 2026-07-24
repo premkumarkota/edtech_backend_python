@@ -40,6 +40,8 @@ class Chapter(Base):
     title       = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)
     order_index = Column(Integer, default=0)
+    difficulty  = Column(String(10), default="medium")  # easy | medium | hard
+    estimated_minutes = Column(Integer, default=45)     # estimated study time
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

@@ -57,8 +57,11 @@ from app.routers.teacher import sessions as teacher_sessions
 from app.routers.teacher import withdrawals as teacher_withdrawals
 from app.routers.payments import router as payments_webhook
 from app.routers.student import ai_planner as student_ai_planner
+from app.routers.student import study_planner as student_study_planner
+from app.routers.admin import exams as admin_exams
 from app.services.reminder_scheduler import start_scheduler, stop_scheduler
 from app.services.ai_plan_scheduler import start_ai_plan_scheduler, stop_ai_plan_scheduler
+from app.services.study_reschedule_service import start_study_planner_scheduler, stop_study_planner_scheduler
 
 
 # ── Lifespan (startup / shutdown) ────────────────────────────────────────────
@@ -72,7 +75,9 @@ async def lifespan(app: FastAPI):
 
     start_scheduler()
     start_ai_plan_scheduler()
+    start_study_planner_scheduler()
     yield
+    stop_study_planner_scheduler()
     stop_ai_plan_scheduler()
     stop_scheduler()
 
@@ -167,6 +172,10 @@ app.include_router(admin_withdrawals.router,
                    prefix="/api/admin/withdrawals",
                    tags=["Admin - Teacher Withdrawals"])
 
+app.include_router(admin_exams.router,
+                   prefix="/api/admin/exams",
+                   tags=["Admin - Exam Management"])
+
 
 # ═══════════════════════════════════════════════════════════════
 # COMMON APIs
@@ -210,6 +219,10 @@ app.include_router(student_sessions.router,
 app.include_router(student_ai_planner.router,
                    prefix="/api/student/ai",
                    tags=["Student - AI Study Planner"])
+
+app.include_router(student_study_planner.router,
+                   prefix="/api/student/ai/v2",
+                   tags=["Student - Study Planner V2"])
 
 app.include_router(student_profile.router,
                    prefix="/api/student/profile",
