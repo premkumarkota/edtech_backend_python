@@ -58,6 +58,7 @@ from app.routers.teacher import withdrawals as teacher_withdrawals
 from app.routers.payments import router as payments_webhook
 from app.routers.student import ai_planner as student_ai_planner
 from app.routers.student import study_planner as student_study_planner
+from app.routers.student import notifications as student_notifications
 from app.routers.admin import exams as admin_exams
 from app.services.reminder_scheduler import start_scheduler, stop_scheduler
 from app.services.ai_plan_scheduler import start_ai_plan_scheduler, stop_ai_plan_scheduler
@@ -227,6 +228,10 @@ app.include_router(student_study_planner.router,
 app.include_router(student_profile.router,
                    prefix="/api/student/profile",
                    tags=["Student - Profile"])
+
+app.include_router(student_notifications.router,
+                   prefix="/api/student/notifications",
+                   tags=["Student - Notifications"])
 
 # ═══════════════════════════════════════════════════════════════
 # TEACHER APP APIs

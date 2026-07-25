@@ -1,10 +1,12 @@
 """
-Study Plan Engine — Deterministic calendar generation algorithm.
+Study Plan Engine — Smart calendar generation algorithm.
 
-Distributes chapters across available days and time slots based on
-difficulty, interleaving subjects for variety.
+Distributes chapters across available days using a Study → Practice → Revise
+cycle. When few chapters exist relative to available days, the engine expands
+each chapter into multiple sessions to fill the schedule meaningfully.
 """
 import logging
+import math
 from datetime import date, timedelta, datetime, timezone, time as dt_time
 from typing import Optional
 
@@ -28,6 +30,11 @@ _DIFFICULTY_MULTIPLIERS = {
 
 _DEFAULT_CHAPTER_MINS = 45
 
+# Session type labels used in the cycle
+_SESSION_LEARN = "Learn"
+_SESSION_PRACTICE = "Practice"
+_SESSION_REVISE = "Revise"
+
 
 def _parse_time(t: str) -> dt_time:
     parts = t.split(":")
@@ -39,7 +46,7 @@ def _slot_duration_mins(start: dt_time, end: dt_time) -> int:
     start_mins = start.hour * 60 + start.minute
     end_mins = end.hour * 60 + end.minute
     if end_mins <= start_mins:
-        end_mins += 24 * 60  # handle overnight
+        end_mins += 24 * 60
     return end_mins - start_mins
 
 
@@ -54,7 +61,7 @@ def calculate_feasibility(
     Returns feasibility info dict.
     """
     if start_date is None:
-        start_date = date.today() + timedelta(days=1)
+        start_date = date.today()
 
     total_days = (target_date - start_date).days
     if total_days <= 0:
@@ -67,14 +74,12 @@ def calculate_feasibility(
             "buffer_days": 0,
         }
 
-    # Calculate daily capacity
     slots_per_day = len(time_slots)
     total_required_mins = sum(u["adjusted_mins"] for u in study_units)
     total_hours_required = round(total_required_mins / 60, 1)
 
-    # Each slot gets 1 topic. Days needed = ceil(units / slots_per_day)
     total_units = len(study_units)
-    days_needed = -(-total_units // slots_per_day)  # ceiling division
+    days_needed = -(-total_units // slots_per_day)
     buffer_days = total_days - days_needed
     daily_topics_avg = round(total_units / max(total_days, 1), 1)
 
@@ -131,7 +136,6 @@ def collect_study_units(
             multiplier = _DIFFICULTY_MULTIPLIERS.get(difficulty, 1.0)
             adjusted_mins = int(estimated * multiplier)
 
-            # Get content IDs for this chapter
             contents = (
                 db.query(SyllabusContent)
                 .filter(SyllabusContent.chapter_id == ch.id)
@@ -158,7 +162,7 @@ def collect_study_units(
 def _round_robin_interleave(units: list[dict]) -> list[dict]:
     """
     Interleave units by subject for variety.
-    e.g., Physics Ch1 → Chemistry Ch1 → Biology Ch1 → Physics Ch2 → ...
+    e.g., Physics Ch1 → Maths Ch1 → Physics Ch2 → Maths Ch2 → ...
     """
     from collections import defaultdict
 
@@ -182,6 +186,53 @@ def _round_robin_interleave(units: list[dict]) -> list[dict]:
     return result
 
 
+def _expand_units_to_sessions(
+    study_units: list[dict],
+    total_available_slots: int,
+) -> list[dict]:
+    """
+    Expand each study unit into multiple sessions (Learn → Practice → Revise)
+    to fill the available schedule meaningfully.
+
+    With 2 chapters and 37 slots, this creates ~6 sessions per chapter
+    (study, deep-dive, practice problems, revise, mock test, final review).
+    """
+    num_units = len(study_units)
+    if num_units == 0:
+        return []
+
+    # How many sessions can we create per unit?
+    sessions_per_unit = max(1, total_available_slots // num_units)
+    # Cap at 6 session types per chapter to keep it meaningful
+    sessions_per_unit = min(sessions_per_unit, 6)
+
+    # Define session phases per chapter
+    _PHASES = [
+        (_SESSION_LEARN, "📖 Learn — Read & understand the concepts", 1.0),
+        ("Deep Dive", "🔍 Deep Dive — Detailed study of formulas & theory", 0.8),
+        (_SESSION_PRACTICE, "✏️ Practice — Solve problems & exercises", 0.9),
+        (_SESSION_REVISE, "🔄 Revise — Review key points & notes", 0.6),
+        ("Mock Test", "📝 Mock Test — MCQ self-assessment", 0.5),
+        ("Final Review", "📋 Final Review — Quick recap before moving on", 0.4),
+    ]
+
+    expanded = []
+    for unit in study_units:
+        for phase_idx in range(sessions_per_unit):
+            phase_name, phase_desc, duration_factor = _PHASES[phase_idx]
+            session = {
+                **unit,
+                "topic_title": f"{phase_name}: {unit['topic_title']}",
+                "original_topic": unit["topic_title"],
+                "session_phase": phase_name,
+                "phase_order": phase_idx,
+                "adjusted_mins": max(20, int(unit["adjusted_mins"] * duration_factor)),
+            }
+            expanded.append(session)
+
+    return expanded
+
+
 def generate_calendar(
     goal: StudyGoal,
     study_units: list[dict],
@@ -190,32 +241,55 @@ def generate_calendar(
 ) -> list[StudyCalendarEntry]:
     """
     Generate calendar entries by assigning study units to available slots.
-    Returns list of StudyCalendarEntry objects (not yet committed).
+    Spreads sessions evenly across available days.
+    Starts from today, not tomorrow.
     """
     if not study_units or not time_slots:
         return []
 
-    # Sort time slots by start_time
     sorted_slots = sorted(time_slots, key=lambda s: (s.start_time.hour, s.start_time.minute))
-
-    # Interleave subjects
-    interleaved = _round_robin_interleave(study_units)
-
-    entries = []
-    current_date = date.today() + timedelta(days=1)
-    slot_index = 0
     slots_count = len(sorted_slots)
 
-    for unit in interleaved:
-        if current_date > goal.target_date:
-            break  # Overflow — skip remaining
+    # Calculate total available slots
+    start_date = date.today()
+    total_days = (goal.target_date - start_date).days
+    if total_days <= 0:
+        total_days = 1
+    total_available_slots = total_days * slots_count
 
-        slot = sorted_slots[slot_index % slots_count]
-        slot_in_day = slot_index % slots_count
+    # Expand units into multiple sessions if we have more days than chapters
+    if len(study_units) < total_available_slots:
+        expanded = _expand_units_to_sessions(study_units, total_available_slots)
+    else:
+        expanded = study_units
+
+    # Interleave by subject for variety
+    interleaved = _round_robin_interleave(expanded)
+
+    # Calculate gap between sessions to spread evenly
+    num_sessions = len(interleaved)
+    if num_sessions <= total_available_slots:
+        # Spread sessions evenly across available slots
+        gap = total_available_slots / num_sessions
+    else:
+        gap = 1  # pack tightly if too many sessions
+
+    entries = []
+    for i, unit in enumerate(interleaved):
+        # Calculate which slot index this session goes to
+        target_slot_idx = int(i * gap)
+        day_offset = target_slot_idx // slots_count
+        slot_in_day = target_slot_idx % slots_count
+
+        entry_date = start_date + timedelta(days=day_offset)
+        if entry_date > goal.target_date:
+            break
+
+        slot = sorted_slots[slot_in_day]
 
         entry = StudyCalendarEntry(
             goal_id=goal.id,
-            plan_date=current_date,
+            plan_date=entry_date,
             slot_label=slot.label,
             slot_order=slot_in_day,
             syllabus_id=unit["syllabus_id"],
@@ -230,10 +304,6 @@ def generate_calendar(
         )
         entries.append(entry)
 
-        slot_index += 1
-        if slot_index % slots_count == 0:
-            current_date += timedelta(days=1)
-
     return entries
 
 
@@ -243,32 +313,28 @@ def generate_plan_for_goal(goal: StudyGoal, db: Session) -> dict:
     Collects units, checks feasibility, generates calendar, persists.
     Returns status dict.
     """
-    # Collect subject IDs
     subject_ids = [gs.syllabus_id for gs in goal.subjects]
     if not subject_ids:
         return {"status": "error", "total_units": 0, "message": "No subjects selected"}
 
-    # Collect study units
     study_units = collect_study_units(subject_ids, db)
     if not study_units:
         return {"status": "error", "total_units": 0, "message": "No chapters found for selected subjects"}
 
-    # Get time slots
     time_slots = goal.time_slots
     if not time_slots:
         return {"status": "error", "total_units": 0, "message": "No time slots configured"}
 
-    # Feasibility
     slot_dicts = [{"label": s.label, "start": s.start_time, "end": s.end_time} for s in time_slots]
     feasibility = calculate_feasibility(study_units, goal.target_date, slot_dicts)
 
-    # Delete existing calendar entries (regenerate)
+    # Delete existing pending entries (regenerate)
     db.query(StudyCalendarEntry).filter(
         StudyCalendarEntry.goal_id == goal.id,
         StudyCalendarEntry.status == "pending",
     ).delete(synchronize_session="fetch")
 
-    # Keep completed/skipped entries
+    # Keep completed/in_progress entries
     completed_chapter_ids = set()
     existing = (
         db.query(StudyCalendarEntry)
@@ -282,7 +348,6 @@ def generate_plan_for_goal(goal: StudyGoal, db: Session) -> dict:
         if e.chapter_id:
             completed_chapter_ids.add(e.chapter_id)
 
-    # Filter out already completed chapters
     remaining_units = [u for u in study_units if u["chapter_id"] not in completed_chapter_ids]
 
     if not remaining_units:
@@ -291,22 +356,21 @@ def generate_plan_for_goal(goal: StudyGoal, db: Session) -> dict:
         db.flush()
         return {"status": "completed", "total_units": len(study_units), "message": "All topics already completed!"}
 
-    # Generate calendar
     entries = generate_calendar(goal, remaining_units, time_slots, db)
 
     for entry in entries:
         db.add(entry)
 
-    # Update goal stats
-    goal.total_study_units = len(study_units)
+    # Update goal stats — count expanded sessions as total units
+    goal.total_study_units = len(entries) + len(completed_chapter_ids)
     goal.completed_units = len(completed_chapter_ids)
-    goal.completion_pct = round(len(completed_chapter_ids) / len(study_units) * 100, 1) if study_units else 0
+    goal.completion_pct = round(len(completed_chapter_ids) / goal.total_study_units * 100, 1) if goal.total_study_units else 0
     goal.updated_at = datetime.now(timezone.utc)
 
     db.flush()
 
     return {
         "status": "generated",
-        "total_units": len(entries) + len(completed_chapter_ids),
+        "total_units": goal.total_study_units,
         "message": feasibility["message"],
     }

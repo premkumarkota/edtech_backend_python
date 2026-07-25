@@ -55,10 +55,14 @@ def list_exams(
     student: User = Depends(get_onboarded_student),
     db: Session = Depends(get_db),
 ):
-    """List available exams for goal creation."""
+    """List available exams for goal creation (filtered by student's category)."""
     exams = (
         db.query(GoalExam)
-        .filter(GoalExam.is_active == True)
+        .filter(
+            GoalExam.is_active == True,
+            # Show exams matching student's category, or exams with no category (global)
+            (GoalExam.category_id == student.category_id) | (GoalExam.category_id == None),
+        )
         .order_by(GoalExam.display_order, GoalExam.name)
         .all()
     )

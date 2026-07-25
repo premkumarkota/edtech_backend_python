@@ -33,6 +33,7 @@ from app.models.withdrawal import (                            # Depends on User
 from app.models.ai_study_planner import (                      # Depends on User
     AiStudentPreference, AiChatMessage, AiStudyPlan, ChatRole
 )
+from app.models.notification import Notification                  # Depends on User
 from app.models.study_planner_v2 import (                      # Depends on User, Category, Syllabus, Chapter
     GoalExam, GoalExamSubject,
     StudyGoal, StudyGoalSubject, StudyTimeSlot,
@@ -67,4 +68,6 @@ __all__ = [
     "StudyGoal", "StudyGoalSubject", "StudyTimeSlot",
     "StudyCalendarEntry", "StudyMcqBank", "StudyMcqAttempt",
     "StudyStreak", "StudyBadge",
+    # Notifications
+    "Notification",
 ]

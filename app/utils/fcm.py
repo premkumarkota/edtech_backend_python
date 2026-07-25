@@ -14,14 +14,81 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+_CATEGORY_MAP = {
+    "session_booked": "sessions",
+    "session_cancelled": "sessions",
+    "session_incoming_call": "sessions",
+    "instant_request": "sessions",
+    "instant_request_accepted": "sessions",
+    "instant_request_declined": "sessions",
+    "instant_session_accepted": "sessions",
+    "instant_session_declined": "sessions",
+    "instant_session_expired": "sessions",
+    "study_session_reminder": "study_planner",
+    "study_streak_reminder": "study_planner",
+    "study_plan_reminder": "study_planner",
+    "subscription_activated": "offers",
+    "withdrawal_processing": "system",
+    "withdrawal_completed": "system",
+    "withdrawal_rejected": "system",
+    "profile_approved": "system",
+    "profile_rejected": "system",
+}
+
+
+def _persist_notification(
+    fcm_token: str,
+    title: str,
+    body: str,
+    data: Optional[dict],
+    user_id: Optional[int] = None,
+) -> None:
+    """Save notification to DB for in-app notification feed. Fire-and-forget."""
+    try:
+        import json
+        from app.database import SessionLocal
+        from app.models.notification import Notification
+        from app.models.user import User
+
+        db = SessionLocal()
+        try:
+            # Resolve user_id from fcm_token if not provided
+            uid = user_id
+            if not uid and fcm_token:
+                user = db.query(User.id).filter(User.fcm_token == fcm_token).first()
+                if user:
+                    uid = user[0]
+
+            if not uid:
+                return
+
+            notif_type = (data or {}).get("type", "general")
+            category = _CATEGORY_MAP.get(notif_type, "system")
+
+            db.add(Notification(
+                user_id=uid,
+                title=title,
+                body=body,
+                notif_type=notif_type,
+                category=category,
+                data=json.dumps(data) if data else None,
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug(f"Failed to persist notification: {e}")
+
+
 def send_push(
     fcm_token: str,
     title: str,
     body: str,
     data: Optional[dict] = None,
+    user_id: Optional[int] = None,
 ) -> bool:
     """
-    Send a push notification to a single device.
+    Send a push notification to a single device and persist it to DB.
 
     Args:
         fcm_token: Device FCM registration token (stored in users.fcm_token)
@@ -29,10 +96,14 @@ def send_push(
         body:      Notification body text
         data:      Optional key-value payload for in-app handling
                    e.g. {"type": "session_booked", "session_id": "42"}
+        user_id:   Optional user ID to persist notification in DB for in-app feed
 
     Returns:
         True if sent successfully, False otherwise (never raises).
     """
+    # Always persist to DB (even if FCM fails, user can see it in-app)
+    _persist_notification(fcm_token, title, body, data, user_id)
+
     if not fcm_token:
         logger.warning("send_push called with empty fcm_token — skipping.")
         return False
@@ -317,6 +388,42 @@ def notify_withdrawal_failed(
         title="Withdrawal Failed",
         body=body,
         data={"type": "withdrawal_failed", "withdrawal_id": withdrawal_id},
+    )
+
+
+# ── Study Planner Notifications ───────────────────────────────────────────────
+
+def notify_student_study_reminder(
+    fcm_token: str,
+    slot_label: str,
+    topic_title: str,
+    subject_name: str,
+    goal_id: int,
+    entry_id: int,
+) -> bool:
+    """Push notification when a student's study slot is about to start."""
+    return send_push(
+        fcm_token=fcm_token,
+        title=f"Time to Study! — {slot_label} Session",
+        body=f"📚 {topic_title} ({subject_name}) is waiting for you. Let's go!",
+        data={
+            "type": "study_session_reminder",
+            "goal_id": goal_id,
+            "entry_id": entry_id,
+        },
+    )
+
+
+def notify_student_streak_reminder(
+    fcm_token: str,
+    current_streak: int,
+) -> bool:
+    """Evening nudge if student hasn't studied today and has an active streak."""
+    return send_push(
+        fcm_token=fcm_token,
+        title="Don't break your streak! 🔥",
+        body=f"You have a {current_streak}-day streak. Study today to keep it alive!",
+        data={"type": "study_streak_reminder"},
     )
 
 

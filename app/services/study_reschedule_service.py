@@ -510,16 +510,184 @@ def _nightly_cron_job():
         db.close()
 
 
+# ═══════════════════════════════════════════════════════════
+# DAILY SESSION REMINDER — runs every 5 minutes
+# ═══════════════════════════════════════════════════════════
+
+def _session_reminder_job() -> None:
+    """
+    Check every student's time slots. If a slot starts within the next 5 minutes
+    (IST), send a push notification with today's session info for that slot.
+    Runs every 5 minutes.
+    """
+    from app.utils.fcm import notify_student_study_reminder
+
+    db = SessionLocal()
+    try:
+        now_utc = datetime.now(timezone.utc)
+        now_ist = now_utc + _IST_OFFSET
+        today_ist = now_ist.date()
+        current_time_ist = now_ist.time()
+
+        # Window: current time to +5 minutes
+        window_end_ist = (now_ist + timedelta(minutes=5)).time()
+
+        # Handle midnight wraparound (e.g., 23:57 → 00:02)
+        wraps_midnight = window_end_ist < current_time_ist
+
+        # Find all time slots for active goals where start_time falls in window
+        query = (
+            db.query(StudyTimeSlot, StudyGoal)
+            .join(StudyGoal, StudyGoal.id == StudyTimeSlot.goal_id)
+            .filter(StudyGoal.status == "active")
+        )
+
+        if wraps_midnight:
+            # Two ranges: [current, 23:59:59] OR [00:00, window_end]
+            from sqlalchemy import or_
+            query = query.filter(
+                or_(
+                    StudyTimeSlot.start_time >= current_time_ist,
+                    StudyTimeSlot.start_time <= window_end_ist,
+                )
+            )
+        else:
+            query = query.filter(
+                StudyTimeSlot.start_time >= current_time_ist,
+                StudyTimeSlot.start_time < window_end_ist,
+            )
+
+        slots_to_notify = query.all()
+
+        if not slots_to_notify:
+            return
+
+        sent = 0
+        for slot, goal in slots_to_notify:
+            # Get today's calendar entry for this goal and slot
+            entry = (
+                db.query(StudyCalendarEntry)
+                .filter(
+                    StudyCalendarEntry.goal_id == goal.id,
+                    StudyCalendarEntry.plan_date == today_ist,
+                    StudyCalendarEntry.slot_label == slot.label,
+                    StudyCalendarEntry.status == "pending",
+                )
+                .first()
+            )
+
+            if not entry:
+                continue
+
+            # Get student's FCM token
+            student = db.query(User).filter(User.id == goal.student_id).first()
+            if not student or not student.fcm_token:
+                continue
+
+            notify_student_study_reminder(
+                fcm_token=student.fcm_token,
+                slot_label=slot.label,
+                topic_title=entry.topic_title,
+                subject_name=entry.subject_name or "",
+                goal_id=goal.id,
+                entry_id=entry.id,
+            )
+            sent += 1
+
+        if sent:
+            logger.info(f"Study reminders sent: {sent}")
+
+    except Exception as e:
+        logger.error(f"Session reminder job failed: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════
+# STREAK REMINDER — runs once at 16:30 IST (11:00 UTC)
+# ═══════════════════════════════════════════════════════════
+
+def _streak_reminder_job() -> None:
+    """
+    Evening nudge: if a student has an active streak but hasn't studied today,
+    send a reminder to not break it.
+    """
+    from app.utils.fcm import notify_student_streak_reminder
+
+    db = SessionLocal()
+    try:
+        now_utc = datetime.now(timezone.utc)
+        today_ist = (now_utc + _IST_OFFSET).date()
+
+        # Get all students with active goals
+        student_ids = (
+            db.query(StudyGoal.student_id)
+            .filter(StudyGoal.status == "active")
+            .distinct()
+            .all()
+        )
+
+        sent = 0
+        for (student_id,) in student_ids:
+            # Check if already studied today
+            completed_today = (
+                db.query(StudyCalendarEntry)
+                .join(StudyGoal, StudyGoal.id == StudyCalendarEntry.goal_id)
+                .filter(
+                    StudyGoal.student_id == student_id,
+                    StudyCalendarEntry.plan_date == today_ist,
+                    StudyCalendarEntry.status == "completed",
+                )
+                .first()
+            )
+
+            if completed_today:
+                continue  # Already studied, no reminder needed
+
+            # Check current streak
+            streak = db.query(StudyStreak).filter(
+                StudyStreak.student_id == student_id
+            ).first()
+
+            if not streak or streak.current_streak < 1:
+                continue  # No active streak to protect
+
+            # Check last study date — only remind if streak is still alive
+            # (i.e., they studied yesterday)
+            yesterday = today_ist - timedelta(days=1)
+            if streak.last_study_date != yesterday:
+                continue
+
+            student = db.query(User).filter(User.id == student_id).first()
+            if not student or not student.fcm_token:
+                continue
+
+            notify_student_streak_reminder(
+                fcm_token=student.fcm_token,
+                current_streak=streak.current_streak,
+            )
+            sent += 1
+
+        if sent:
+            logger.info(f"Streak reminders sent: {sent}")
+
+    except Exception as e:
+        logger.error(f"Streak reminder job failed: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
 # ── Public API ──────────────────────────────────────────────
 
 _study_scheduler: BackgroundScheduler | None = None
 
 
 def start_study_planner_scheduler() -> None:
-    """Start the nightly study planner scheduler."""
+    """Start the study planner scheduler with all jobs."""
     global _study_scheduler
     _study_scheduler = BackgroundScheduler(timezone="UTC")
-    # Run at 19:00 UTC = 00:30 IST
+
+    # 1. Nightly cron — reschedule, streaks, badges (19:00 UTC = 00:30 IST)
     _study_scheduler.add_job(
         _nightly_cron_job,
         trigger=CronTrigger(hour=19, minute=0),
@@ -528,8 +696,32 @@ def start_study_planner_scheduler() -> None:
         max_instances=1,
         misfire_grace_time=300,
     )
+
+    # 2. Session reminders — every 5 minutes, checks if any slot is starting
+    _study_scheduler.add_job(
+        _session_reminder_job,
+        trigger=CronTrigger(minute="*/5"),
+        id="study_session_reminder",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
+    )
+
+    # 3. Streak reminder — 11:00 UTC = 16:30 IST (evening nudge)
+    _study_scheduler.add_job(
+        _streak_reminder_job,
+        trigger=CronTrigger(hour=11, minute=0),
+        id="study_streak_reminder",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
     _study_scheduler.start()
-    logger.info("Study Planner nightly scheduler started (19:00 UTC / 00:30 IST)")
+    logger.info(
+        "Study Planner scheduler started: "
+        "nightly@19:00UTC, reminders@every5min, streak@11:00UTC"
+    )
 
 
 def stop_study_planner_scheduler() -> None:
@@ -537,4 +729,4 @@ def stop_study_planner_scheduler() -> None:
     global _study_scheduler
     if _study_scheduler and _study_scheduler.running:
         _study_scheduler.shutdown(wait=False)
-        logger.info("Study Planner nightly scheduler stopped.")
+        logger.info("Study Planner scheduler stopped.")
