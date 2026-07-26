@@ -97,6 +97,8 @@ def update_exam(
         exam.description = payload.description
     if payload.icon_url is not None:
         exam.icon_url = payload.icon_url
+    if payload.category_id is not None:
+        exam.category_id = payload.category_id if payload.category_id > 0 else None
     if payload.is_active is not None:
         exam.is_active = payload.is_active
     if payload.display_order is not None:
@@ -153,6 +155,13 @@ def add_subject_to_exam(
     syllabus = db.query(Syllabus).filter(Syllabus.id == payload.syllabus_id).first()
     if not syllabus:
         raise HTTPException(404, "Syllabus not found")
+
+    if exam.category_id is not None and syllabus.category_id != exam.category_id:
+        raise HTTPException(
+            400,
+            f"Syllabus '{syllabus.title}' belongs to a different category than this exam. "
+            "Bind the exam to the matching category, or map a syllabus from the same category.",
+        )
 
     existing = db.query(GoalExamSubject).filter(
         GoalExamSubject.exam_id == exam_id,

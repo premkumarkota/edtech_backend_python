@@ -3,8 +3,13 @@ AI Study Plan Daily Notification Scheduler.
 
 Runs every 30 minutes, checks for students whose preferred reminder time
 has arrived, generates their daily plan, and sends a push notification.
+
+When STUDY_PLANNER_V2_CANONICAL=1 (default), this scheduler is not started
+from main.py — Study Planner V2 owns reminders instead. The guard below is a
+safety net if the scheduler is started manually.
 """
 import logging
+import os
 from datetime import datetime, timezone, timedelta, time as dt_time
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -22,11 +27,21 @@ logger = logging.getLogger(__name__)
 _IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
+def _v2_canonical_reminders() -> bool:
+    return os.environ.get("STUDY_PLANNER_V2_CANONICAL", "1").strip().lower() in (
+        "1", "true", "yes",
+    )
+
+
 def _send_study_plan_reminders() -> None:
     """
     Find students whose reminder_time matches the current time (±15 min window).
     Generate daily plan if not already generated, and send FCM push.
     """
+    # V2 study planner scheduler sends session/streak reminders — skip V1 pushes.
+    if _v2_canonical_reminders():
+        return
+
     db = SessionLocal()
     try:
         now_utc = datetime.now(timezone.utc)

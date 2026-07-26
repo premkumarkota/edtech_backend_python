@@ -9,7 +9,7 @@ from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func as sqlfunc
+from sqlalchemy import func as sqlfunc, case
 
 from app.database import get_db
 from app.dependencies.auth import get_onboarded_student
@@ -37,6 +37,7 @@ from app.services.study_plan_engine import (
     collect_study_units, calculate_feasibility, generate_plan_for_goal,
 )
 from app.services.study_mcq_service import get_or_generate_mcq, score_mcq_attempt
+from app.services.study_rate_limit import check_rate_limit
 from app.services.study_reschedule_service import update_streak, check_and_award_badges
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def _ist_today() -> date:
+    return (datetime.now(timezone.utc) + _IST_OFFSET).date()
+
+
+def _resolve_entry_contents(entry: StudyCalendarEntry, db: Session) -> list[ContentInfo]:
+    """Resolve learning materials from snapshot IDs, or live by chapter if snapshot empty."""
+    contents: list[ContentInfo] = []
+    seen: set[int] = set()
+
+    for cid in (entry.content_ids or []):
+        content = db.query(SyllabusContent).filter(SyllabusContent.id == cid).first()
+        if content and content.id not in seen:
+            seen.add(content.id)
+            contents.append(ContentInfo(
+                id=content.id,
+                title=content.title,
+                content_type=content.content_type,
+                file_url=content.file_url or "",
+            ))
+
+    if not contents and entry.chapter_id:
+        live = (
+            db.query(SyllabusContent)
+            .filter(SyllabusContent.chapter_id == entry.chapter_id)
+            .order_by(SyllabusContent.order_index, SyllabusContent.id)
+            .all()
+        )
+        for content in live:
+            if content.id in seen:
+                continue
+            seen.add(content.id)
+            contents.append(ContentInfo(
+                id=content.id,
+                title=content.title,
+                content_type=content.content_type,
+                file_url=content.file_url or "",
+            ))
+        if contents:
+            entry.content_ids = [c.id for c in contents]
+
+    return contents
 
 
 # ═══════════════════════════════════════════════════════════
@@ -56,14 +100,20 @@ def list_exams(
     db: Session = Depends(get_db),
 ):
     """List available exams for goal creation (filtered by student's category)."""
+    # Category-matched exams first. Uncategorized templates (category_id IS NULL)
+    # are global fallbacks and only appear when is_active (filtered below).
+    # Custom goals (no exam_id) are unaffected — this endpoint lists templates only.
+    category_match_rank = case(
+        (GoalExam.category_id == student.category_id, 0),
+        else_=1,
+    )
     exams = (
         db.query(GoalExam)
         .filter(
             GoalExam.is_active == True,
-            # Show exams matching student's category, or exams with no category (global)
             (GoalExam.category_id == student.category_id) | (GoalExam.category_id == None),
         )
-        .order_by(GoalExam.display_order, GoalExam.name)
+        .order_by(category_match_rank, GoalExam.display_order, GoalExam.name)
         .all()
     )
     results = []
@@ -102,11 +152,47 @@ def setup_goal(
     if payload.target_date <= date.today():
         raise HTTPException(400, "Target date must be in the future")
 
-    # Validate subjects exist
+    # Validate exam + category membership
+    exam = None
+    if payload.exam_id is not None:
+        exam = db.query(GoalExam).filter(
+            GoalExam.id == payload.exam_id,
+            GoalExam.is_active == True,
+        ).first()
+        if not exam:
+            raise HTTPException(400, "Exam template not found or inactive")
+        if exam.category_id is not None and student.category_id is not None:
+            if exam.category_id != student.category_id:
+                raise HTTPException(
+                    400,
+                    "This exam is not available for your learning category. "
+                    "Choose an exam that matches your profile, or ask admin to rebind it.",
+                )
+        elif exam.category_id is not None and student.category_id is None:
+            raise HTTPException(400, "Complete onboarding (category) before selecting a category-bound exam")
+
+    if not payload.subject_ids:
+        raise HTTPException(400, "Select at least one subject")
+
+    # Validate subjects exist and belong to exam / student category
+    exam_subject_ids = set()
+    if exam is not None:
+        exam_subject_ids = {es.syllabus_id for es in exam.subjects}
+
     for sid in payload.subject_ids:
         syl = db.query(Syllabus).filter(Syllabus.id == sid).first()
         if not syl:
             raise HTTPException(400, f"Syllabus {sid} not found")
+        if student.category_id is not None and syl.category_id != student.category_id:
+            raise HTTPException(
+                400,
+                f"Subject '{syl.title}' is not in your learning category",
+            )
+        if exam is not None and exam_subject_ids and sid not in exam_subject_ids:
+            raise HTTPException(
+                400,
+                f"Subject '{syl.title}' is not mapped to exam '{exam.name}'",
+            )
 
     # Validate time slots don't overlap
     parsed_slots = []
@@ -160,8 +246,10 @@ def setup_goal(
 
     db.flush()
 
-    # Calculate feasibility
-    study_units = collect_study_units(payload.subject_ids, db)
+    # Calculate feasibility (prefer units with materials for honest estimates)
+    study_units = collect_study_units(payload.subject_ids, db, require_content=True)
+    if not study_units:
+        study_units = collect_study_units(payload.subject_ids, db, require_content=False)
     slot_dicts = [{"label": s["label"], "start": s["start"], "end": s["end"]} for s in parsed_slots]
     feasibility = calculate_feasibility(study_units, payload.target_date, slot_dicts)
 
@@ -336,6 +424,14 @@ def generate_calendar(
     db: Session = Depends(get_db),
 ):
     """Generate or regenerate the study calendar for a goal."""
+    allowed, rate_msg = check_rate_limit(
+        f"generate:{student.id}",
+        max_calls=5,
+        window_hours=1.0,
+    )
+    if not allowed:
+        raise HTTPException(429, rate_msg)
+
     goal = db.query(StudyGoal).filter(
         StudyGoal.id == goal_id, StudyGoal.student_id == student.id
     ).first()
@@ -344,6 +440,9 @@ def generate_calendar(
 
     result = generate_plan_for_goal(goal, db)
     db.commit()
+
+    if result["status"] == "error":
+        raise HTTPException(status_code=422, detail=result["message"])
 
     return GenerateStatusResponse(
         status=result["status"],
@@ -410,7 +509,7 @@ def get_today_plan(
     if not goal:
         raise HTTPException(404, "Goal not found")
 
-    today = date.today()
+    today = _ist_today()
     entries = (
         db.query(StudyCalendarEntry)
         .filter(
@@ -428,17 +527,8 @@ def get_today_plan(
 
     sessions = []
     for entry in entries:
-        # Get content details
-        contents = []
-        for cid in (entry.content_ids or []):
-            content = db.query(SyllabusContent).filter(SyllabusContent.id == cid).first()
-            if content:
-                contents.append(ContentInfo(
-                    id=content.id,
-                    title=content.title,
-                    content_type=content.content_type,
-                    file_url=content.file_url or "",
-                ))
+        contents = _resolve_entry_contents(entry, db)
+        has_materials = len(contents) > 0
 
         sessions.append(TodaySessionResponse(
             id=entry.id,
@@ -452,10 +542,15 @@ def get_today_plan(
             status=entry.status,
             is_revision=entry.is_revision or False,
             contents=contents,
+            has_materials=has_materials,
+            # MCQ can always be generated via LLM / bank; materials are independent
             mcq_available=True,
             mcq_score=entry.mcq_score,
             mcq_passed=entry.mcq_passed,
         ))
+
+    if any(True for e in entries if e.content_ids):
+        db.commit()
 
     total = len(sessions)
     completed = sum(1 for s in sessions if s.status == "completed")
@@ -500,24 +595,24 @@ def start_session(
 
     entry.status = "in_progress"
     entry.started_at = datetime.now(timezone.utc)
+
+    contents = _resolve_entry_contents(entry, db)
     db.commit()
 
-    # Get contents
-    contents = []
-    for cid in (entry.content_ids or []):
-        content = db.query(SyllabusContent).filter(SyllabusContent.id == cid).first()
-        if content:
-            contents.append(ContentInfo(
-                id=content.id, title=content.title,
-                content_type=content.content_type, file_url=content.file_url or "",
-            ))
+    msg = f"Let's study {entry.topic_title}!"
+    if not contents:
+        msg = (
+            f"No uploaded materials for {entry.topic_title} yet. "
+            "Self-study this topic, then take the MCQ or mark complete."
+        )
 
     return SessionStartResponse(
         entry_id=entry.id,
         status=entry.status,
         started_at=entry.started_at,
         contents=contents,
-        message=f"Let's study {entry.topic_title}!",
+        has_materials=bool(contents),
+        message=msg,
     )
 
 
@@ -539,6 +634,9 @@ def complete_session(
     )
     if not entry:
         raise HTTPException(404, "Session not found")
+
+    if entry.status not in ("pending", "in_progress"):
+        raise HTTPException(400, f"Session is already {entry.status}")
 
     entry.status = "completed"
     entry.completed_at = datetime.now(timezone.utc)
@@ -586,6 +684,9 @@ def skip_session(
     if not entry:
         raise HTTPException(404, "Session not found")
 
+    if entry.status not in ("pending", "in_progress"):
+        raise HTTPException(400, f"Session is already {entry.status}")
+
     entry.status = "skipped"
     db.commit()
     return {"message": "Session skipped"}
@@ -602,6 +703,14 @@ def generate_mcq(
     db: Session = Depends(get_db),
 ):
     """Generate or retrieve cached MCQs for a calendar entry."""
+    allowed, rate_msg = check_rate_limit(
+        f"mcq:{student.id}",
+        max_calls=20,
+        window_hours=1.0,
+    )
+    if not allowed:
+        raise HTTPException(429, rate_msg)
+
     entry = (
         db.query(StudyCalendarEntry)
         .join(StudyGoal, StudyGoal.id == StudyCalendarEntry.goal_id)
@@ -614,8 +723,13 @@ def generate_mcq(
     if not entry:
         raise HTTPException(404, "Calendar entry not found")
 
-    mcq_bank = get_or_generate_mcq(entry, db)
-    if not mcq_bank:
+    mcq_bank, source = get_or_generate_mcq(entry, db)
+    if source == "llm_unavailable":
+        raise HTTPException(
+            503,
+            "MCQ generation service is temporarily unavailable. Try again later.",
+        )
+    if not mcq_bank or not source:
         raise HTTPException(500, "Failed to generate MCQs. Try again later.")
 
     db.commit()
@@ -637,6 +751,7 @@ def generate_mcq(
         mcq_bank_id=mcq_bank.id,
         topic=entry.topic_title,
         questions=questions,
+        source=source,
         pass_threshold=threshold,
         time_limit_mins=10,
     )

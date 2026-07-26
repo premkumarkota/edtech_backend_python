@@ -40,7 +40,7 @@ class ExamCreateRequest(BaseModel):
     code: str = Field(..., min_length=1, max_length=30)
     description: Optional[str] = None
     icon_url: Optional[str] = None
-    category_id: Optional[int] = None
+    category_id: int = Field(..., description="Required — binds exam to a learning category")
     display_order: int = 0
 
 
@@ -48,6 +48,7 @@ class ExamUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     icon_url: Optional[str] = None
+    category_id: Optional[int] = None
     is_active: Optional[bool] = None
     display_order: Optional[int] = None
 
@@ -125,8 +126,12 @@ class GoalListResponse(BaseModel):
 class GoalUpdateRequest(BaseModel):
     target_date: Optional[date] = None
     daily_study_hours: Optional[float] = Field(None, ge=0.5, le=16.0)
-    planning_mode: Optional[str] = None
-    status: Optional[str] = None
+    planning_mode: Optional[str] = Field(None, pattern=r"^(daily|weekly|monthly)$")
+    status: Optional[str] = Field(
+        None,
+        pattern=r"^(active|paused)$",
+        description="Pause or resume the goal (active | paused)",
+    )
     pass_threshold: Optional[float] = Field(None, ge=0, le=100)
 
 
@@ -191,6 +196,7 @@ class TodaySessionResponse(BaseModel):
     status: str = "pending"
     is_revision: bool = False
     contents: List[ContentInfo] = []
+    has_materials: bool = False
     mcq_available: bool = True
     mcq_score: Optional[float] = None
     mcq_passed: Optional[bool] = None
@@ -212,6 +218,7 @@ class SessionStartResponse(BaseModel):
     status: str
     started_at: datetime
     contents: List[ContentInfo] = []
+    has_materials: bool = False
     message: str = ""
 
 
@@ -230,6 +237,7 @@ class McqGenerateResponse(BaseModel):
     mcq_bank_id: int
     topic: str
     questions: List[McqQuestionResponse]
+    source: str = Field(..., description="cache | quiz_bank | llm")
     pass_threshold: float = 60.0
     time_limit_mins: int = 10
 

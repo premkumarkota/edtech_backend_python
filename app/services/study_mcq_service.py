@@ -5,8 +5,9 @@ Generates 10 MCQs per topic via LLM, caches in study_mcq_banks,
 and handles scoring with pass/fail logic.
 """
 import logging
-import json
-from typing import Optional
+from typing import Literal, Optional
+
+McqSource = Literal["cache", "quiz_bank", "llm"]
 
 from sqlalchemy.orm import Session
 
@@ -89,10 +90,12 @@ def _try_quiz_bank_fallback(chapter_id: int, db: Session) -> Optional[list[dict]
 def get_or_generate_mcq(
     entry: StudyCalendarEntry,
     db: Session,
-) -> Optional[StudyMcqBank]:
+) -> tuple[Optional[StudyMcqBank], Optional[McqSource | str]]:
     """
     Get cached MCQs or generate new ones for a calendar entry's topic.
-    Returns StudyMcqBank object.
+
+    Returns (bank, source) on success where source is ``cache``, ``quiz_bank``,
+    or ``llm``. On LLM failure returns ``(None, "llm_unavailable")``.
     """
     # Check cache first
     cached = db.query(StudyMcqBank).filter(
@@ -101,13 +104,14 @@ def get_or_generate_mcq(
     ).first()
 
     if cached and isinstance(cached.questions, list) and len(cached.questions) >= 5:
-        return cached
+        return cached, "cache"
 
-    # Try existing quiz bank
+    # Prefer published quiz-bank questions before calling the LLM
     fallback_questions = _try_quiz_bank_fallback(entry.chapter_id, db)
+    source: McqSource = "quiz_bank"
 
     if not fallback_questions:
-        # Generate via LLM
+        source = "llm"
         chapter = db.query(Chapter).filter(Chapter.id == entry.chapter_id).first() if entry.chapter_id else None
         topic_context = entry.topic_title
         if chapter and chapter.description:
@@ -125,14 +129,14 @@ def get_or_generate_mcq(
         if result and "questions" in result:
             fallback_questions = result["questions"]
         else:
-            logger.error(f"LLM MCQ generation failed for topic: {entry.topic_title}")
-            return None
+            logger.error("LLM MCQ generation failed for topic: %s", entry.topic_title)
+            return None, "llm_unavailable"
 
     # Save to cache
     if cached:
         cached.questions = fallback_questions
         db.flush()
-        return cached
+        return cached, source
 
     mcq_bank = StudyMcqBank(
         chapter_id=entry.chapter_id,
@@ -141,7 +145,7 @@ def get_or_generate_mcq(
     )
     db.add(mcq_bank)
     db.flush()
-    return mcq_bank
+    return mcq_bank, source
 
 
 def score_mcq_attempt(

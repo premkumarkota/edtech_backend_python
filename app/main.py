@@ -64,6 +64,12 @@ from app.services.reminder_scheduler import start_scheduler, stop_scheduler
 from app.services.ai_plan_scheduler import start_ai_plan_scheduler, stop_ai_plan_scheduler
 from app.services.study_reschedule_service import start_study_planner_scheduler, stop_study_planner_scheduler
 
+# When True (default), V2 study planner owns session/streak reminders; V1 AI plan
+# daily push is disabled to avoid duplicate notifications.
+_V2_CANONICAL = os.environ.get("STUDY_PLANNER_V2_CANONICAL", "1").strip().lower() in (
+    "1", "true", "yes",
+)
+
 
 # ── Lifespan (startup / shutdown) ────────────────────────────────────────────
 @asynccontextmanager
@@ -75,11 +81,15 @@ async def lifespan(app: FastAPI):
         print(f"WARNING: DB error on startup: {e}")
 
     start_scheduler()
-    start_ai_plan_scheduler()
+    if _V2_CANONICAL:
+        print("INFO: V1 AI study plan reminders disabled (STUDY_PLANNER_V2_CANONICAL=1).")
+    else:
+        start_ai_plan_scheduler()
     start_study_planner_scheduler()
     yield
     stop_study_planner_scheduler()
-    stop_ai_plan_scheduler()
+    if not _V2_CANONICAL:
+        stop_ai_plan_scheduler()
     stop_scheduler()
 
 

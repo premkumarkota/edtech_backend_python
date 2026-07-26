@@ -111,12 +111,16 @@ def calculate_feasibility(
 def collect_study_units(
     subject_ids: list[int],
     db: Session,
+    *,
+    require_content: bool = False,
 ) -> list[dict]:
     """
     Collect all chapters from selected subjects and convert to study units.
     Each chapter becomes one study unit.
+    If require_content=True, chapters with zero syllabus_contents are skipped.
     """
     study_units = []
+    skipped_empty = 0
 
     for syllabus_id in subject_ids:
         syllabus = db.query(Syllabus).filter(Syllabus.id == syllabus_id).first()
@@ -144,6 +148,10 @@ def collect_study_units(
             )
             content_ids = [c.id for c in contents]
 
+            if require_content and not content_ids:
+                skipped_empty += 1
+                continue
+
             study_units.append({
                 "syllabus_id": syllabus_id,
                 "subject_name": syllabus.title,
@@ -154,7 +162,12 @@ def collect_study_units(
                 "estimated_mins": estimated,
                 "adjusted_mins": adjusted_mins,
                 "content_ids": content_ids,
+                "has_materials": bool(content_ids),
             })
+
+    if require_content and skipped_empty and not study_units:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("All %s chapters skipped — no study materials uploaded", skipped_empty)
 
     return study_units
 
@@ -317,9 +330,26 @@ def generate_plan_for_goal(goal: StudyGoal, db: Session) -> dict:
     if not subject_ids:
         return {"status": "error", "total_units": 0, "message": "No subjects selected"}
 
-    study_units = collect_study_units(subject_ids, db)
+    # Prefer chapters that already have materials; fall back to all chapters
+    # so empty syllabi still surface a clear generate error instead of silent empty calendar.
+    study_units = collect_study_units(subject_ids, db, require_content=True)
+    skipped_note = ""
     if not study_units:
+        all_units = collect_study_units(subject_ids, db, require_content=False)
+        if all_units:
+            return {
+                "status": "error",
+                "total_units": 0,
+                "message": (
+                    "No study materials found on any chapter. "
+                    "Upload lessons in Admin → Syllabus before generating a plan."
+                ),
+            }
         return {"status": "error", "total_units": 0, "message": "No chapters found for selected subjects"}
+    else:
+        all_count = len(collect_study_units(subject_ids, db, require_content=False))
+        if all_count > len(study_units):
+            skipped_note = f" Skipped {all_count - len(study_units)} chapter(s) with no materials."
 
     time_slots = goal.time_slots
     if not time_slots:
@@ -372,5 +402,5 @@ def generate_plan_for_goal(goal: StudyGoal, db: Session) -> dict:
     return {
         "status": "generated",
         "total_units": goal.total_study_units,
-        "message": feasibility["message"],
+        "message": feasibility["message"] + skipped_note,
     }
