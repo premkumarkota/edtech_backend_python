@@ -6,6 +6,7 @@ Goal-based study planning with calendar, MCQ testing, progress, streaks, badges.
 import logging
 from datetime import date, datetime, timezone, timedelta, time as dt_time
 from collections import defaultdict
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -96,22 +97,29 @@ def _resolve_entry_contents(entry: StudyCalendarEntry, db: Session) -> list[Cont
 
 @router.get("/exams", response_model=list[ExamResponse])
 def list_exams(
+    category_id: Optional[int] = Query(
+        None,
+        description="Browse category (home switcher). Defaults to student's profile category.",
+    ),
     student: User = Depends(get_onboarded_student),
     db: Session = Depends(get_db),
 ):
-    """List available exams for goal creation (filtered by student's category)."""
+    """List available exams for goal creation (filtered by effective category)."""
+    # Home category switcher can browse another board without changing profile —
+    # same pattern as student syllabus / teachers feed.
+    effective_category_id = category_id if category_id is not None else student.category_id
+
     # Category-matched exams first. Uncategorized templates (category_id IS NULL)
     # are global fallbacks and only appear when is_active (filtered below).
-    # Custom goals (no exam_id) are unaffected — this endpoint lists templates only.
     category_match_rank = case(
-        (GoalExam.category_id == student.category_id, 0),
+        (GoalExam.category_id == effective_category_id, 0),
         else_=1,
     )
     exams = (
         db.query(GoalExam)
         .filter(
             GoalExam.is_active == True,
-            (GoalExam.category_id == student.category_id) | (GoalExam.category_id == None),
+            (GoalExam.category_id == effective_category_id) | (GoalExam.category_id == None),
         )
         .order_by(category_match_rank, GoalExam.display_order, GoalExam.name)
         .all()
@@ -122,6 +130,9 @@ def list_exams(
         for es in exam.subjects:
             syl = es.syllabus
             if syl:
+                # When browsing a category, only surface subjects from that category
+                if effective_category_id is not None and syl.category_id != effective_category_id:
+                    continue
                 subjects.append(ExamSubjectResponse(
                     syllabus_id=syl.id,
                     title=syl.title,
@@ -152,6 +163,11 @@ def setup_goal(
     if payload.target_date <= date.today():
         raise HTTPException(400, "Target date must be in the future")
 
+    # Home category switcher may browse another board without changing profile
+    effective_category_id = (
+        payload.category_id if payload.category_id is not None else student.category_id
+    )
+
     # Validate exam + category membership
     exam = None
     if payload.exam_id is not None:
@@ -161,20 +177,20 @@ def setup_goal(
         ).first()
         if not exam:
             raise HTTPException(400, "Exam template not found or inactive")
-        if exam.category_id is not None and student.category_id is not None:
-            if exam.category_id != student.category_id:
+        if exam.category_id is not None and effective_category_id is not None:
+            if exam.category_id != effective_category_id:
                 raise HTTPException(
                     400,
-                    "This exam is not available for your learning category. "
-                    "Choose an exam that matches your profile, or ask admin to rebind it.",
+                    "This exam is not available for the selected learning category. "
+                    "Choose an exam that matches the category you are browsing.",
                 )
-        elif exam.category_id is not None and student.category_id is None:
-            raise HTTPException(400, "Complete onboarding (category) before selecting a category-bound exam")
+        elif exam.category_id is not None and effective_category_id is None:
+            raise HTTPException(400, "Select a learning category before picking a category-bound exam")
 
     if not payload.subject_ids:
         raise HTTPException(400, "Select at least one subject")
 
-    # Validate subjects exist and belong to exam / student category
+    # Validate subjects exist and belong to exam / effective category
     exam_subject_ids = set()
     if exam is not None:
         exam_subject_ids = {es.syllabus_id for es in exam.subjects}
@@ -183,10 +199,10 @@ def setup_goal(
         syl = db.query(Syllabus).filter(Syllabus.id == sid).first()
         if not syl:
             raise HTTPException(400, f"Syllabus {sid} not found")
-        if student.category_id is not None and syl.category_id != student.category_id:
+        if effective_category_id is not None and syl.category_id != effective_category_id:
             raise HTTPException(
                 400,
-                f"Subject '{syl.title}' is not in your learning category",
+                f"Subject '{syl.title}' is not in the selected learning category",
             )
         if exam is not None and exam_subject_ids and sid not in exam_subject_ids:
             raise HTTPException(
@@ -266,10 +282,16 @@ def setup_goal(
 
 @router.get("/goals", response_model=list[GoalListResponse])
 def list_goals(
+    category_id: Optional[int] = Query(
+        None,
+        description="When set (home category switch), only goals for that category.",
+    ),
     student: User = Depends(get_onboarded_student),
     db: Session = Depends(get_db),
 ):
-    """List student's study goals."""
+    """List student's study goals, optionally filtered by browse category."""
+    effective_category_id = category_id if category_id is not None else student.category_id
+
     goals = (
         db.query(StudyGoal)
         .filter(StudyGoal.student_id == student.id)
@@ -281,6 +303,22 @@ def list_goals(
     today = date.today()
 
     for goal in goals:
+        # Filter by category when browsing: exam-bound goals must match;
+        # custom goals match if any subject is in that category (or keep if no subjects).
+        if effective_category_id is not None:
+            if goal.exam_id is not None and goal.exam is not None:
+                exam_cat = goal.exam.category_id
+                if exam_cat is not None and exam_cat != effective_category_id:
+                    continue
+            else:
+                subject_cats = {
+                    gs.syllabus.category_id
+                    for gs in goal.subjects
+                    if gs.syllabus is not None
+                }
+                if subject_cats and effective_category_id not in subject_cats:
+                    continue
+
         exam_name = None
         exam_icon = None
         if goal.exam:

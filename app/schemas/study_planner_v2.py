@@ -72,6 +72,8 @@ class TimeSlotInput(BaseModel):
 class GoalSetupRequest(BaseModel):
     exam_id: Optional[int] = None
     custom_goal_name: Optional[str] = None
+    # Optional browse category from home switcher (does not change profile)
+    category_id: Optional[int] = None
     subject_ids: List[int] = Field(..., min_length=1)
     target_date: date
     daily_study_hours: float = Field(..., ge=0.5, le=16.0)

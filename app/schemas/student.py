@@ -25,6 +25,11 @@ class StudentOnboardingRequest(BaseModel):
     category_id: int
 
 
+class StudentCategoryUpdateRequest(BaseModel):
+    """Home category switcher — update the student's active learning board."""
+    category_id: int
+
+
 # ========== RESPONSE SCHEMAS ==========
 
 class StudentProfileResponse(BaseModel):

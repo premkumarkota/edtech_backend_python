@@ -7,6 +7,7 @@ from app.schemas.common import MessageResponse
 from app.schemas.student import (
     StudentSyncRequest,
     StudentOnboardingRequest,
+    StudentCategoryUpdateRequest,
     StudentProfileResponse,
     StudentSyncResponse,
 )
@@ -194,6 +195,34 @@ def get_student_profile(
     Get current student's profile.
     Merges core User data with academic StudentProfile data.
     """
+    return _student_profile_dict(current_user, db)
+
+
+@router.patch("/category", response_model=StudentProfileResponse)
+def update_student_category(
+    request: StudentCategoryUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_student),
+):
+    """
+    Update the student's learning category (home board switcher).
+    Study Planner exams/goals then follow this category.
+    """
+    from app.models.category import Category
+
+    category = db.query(Category).filter(
+        Category.id == request.category_id,
+        Category.is_active == True,
+    ).first()
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or inactive category",
+        )
+
+    current_user.category_id = request.category_id
+    db.commit()
+    db.refresh(current_user)
     return _student_profile_dict(current_user, db)
 
 
