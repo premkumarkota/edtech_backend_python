@@ -129,16 +129,41 @@ def list_exams(
         subjects = []
         for es in exam.subjects:
             syl = es.syllabus
-            if syl:
-                # When browsing a category, only surface subjects from that category
-                if effective_category_id is not None and syl.category_id != effective_category_id:
-                    continue
+            if not syl:
+                continue
+            # Prefer subjects that belong to the board being browsed
+            if (
+                effective_category_id is not None
+                and syl.category_id is not None
+                and syl.category_id != effective_category_id
+            ):
+                continue
+            subjects.append(ExamSubjectResponse(
+                syllabus_id=syl.id,
+                title=syl.title,
+                is_required=es.is_required,
+                weightage=es.weightage,
+            ))
+
+        # If admin mapped subjects from another board (or none), fall back to
+        # this category's syllabus so students can still pick subjects.
+        if not subjects and effective_category_id is not None:
+            for syl in (
+                db.query(Syllabus)
+                .filter(
+                    Syllabus.category_id == effective_category_id,
+                    Syllabus.is_active == True,
+                )
+                .order_by(Syllabus.title)
+                .all()
+            ):
                 subjects.append(ExamSubjectResponse(
                     syllabus_id=syl.id,
                     title=syl.title,
-                    is_required=es.is_required,
-                    weightage=es.weightage,
+                    is_required=False,
+                    weightage=1.0,
                 ))
+
         results.append(ExamResponse(
             id=exam.id, name=exam.name, code=exam.code,
             description=exam.description, icon_url=exam.icon_url,
@@ -193,7 +218,15 @@ def setup_goal(
     # Validate subjects exist and belong to exam / effective category
     exam_subject_ids = set()
     if exam is not None:
-        exam_subject_ids = {es.syllabus_id for es in exam.subjects}
+        exam_subject_ids = {
+            es.syllabus_id
+            for es in exam.subjects
+            if es.syllabus is not None
+            and (
+                effective_category_id is None
+                or es.syllabus.category_id == effective_category_id
+            )
+        }
 
     for sid in payload.subject_ids:
         syl = db.query(Syllabus).filter(Syllabus.id == sid).first()
@@ -204,6 +237,9 @@ def setup_goal(
                 400,
                 f"Subject '{syl.title}' is not in the selected learning category",
             )
+        # If exam has in-category mapped subjects, require membership.
+        # If mappings are empty/wrong-board (fallback syllabus list), allow any
+        # subject from the effective category.
         if exam is not None and exam_subject_ids and sid not in exam_subject_ids:
             raise HTTPException(
                 400,
