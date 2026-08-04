@@ -46,9 +46,12 @@ def ai_generate_quiz(
     if not topic:
         raise HTTPException(status_code=422, detail="Chapter / topic is required")
 
+    subject = (payload.subject or "").strip()
+
     try:
         result = generate_quiz(
             category_name=cat.name,
+            subject=subject,
             topic=topic,
             difficulty=(payload.difficulty or "medium").strip(),
             num_questions=payload.num_questions,
@@ -65,7 +68,11 @@ def ai_generate_quiz(
     quiz = Quiz(
         category_id=payload.category_id,
         title=result["title"][:200],
-        description=f"AI-generated quiz on '{topic}' ({payload.difficulty}).",
+        description=(
+            f"AI-generated quiz on '{topic}'"
+            + (f" — {subject}" if subject else "")
+            + f" ({payload.difficulty})."
+        ),
         duration_mins=payload.duration_mins,
         pass_marks=payload.pass_marks,
         total_marks=sum(q["marks"] for q in questions_data),

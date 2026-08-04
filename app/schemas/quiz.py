@@ -18,6 +18,7 @@ class QuizCreate(BaseModel):
 class AIQuizGenerate(BaseModel):
     """Request body for AI-generated quizzes (admin panel)."""
     category_id: int
+    subject: Optional[str] = None    # subject / syllabus name (context), optional
     topic: str                       # chapter / topic name the questions are about
     difficulty: str = "medium"       # easy | medium | hard
     num_questions: int = 10          # clamped 1..30 server-side

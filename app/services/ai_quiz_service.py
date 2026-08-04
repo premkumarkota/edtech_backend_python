@@ -43,10 +43,14 @@ class AIQuizError(Exception):
 
 # ── Prompt ─────────────────────────────────────────────────────────────────────
 
-def _build_prompt(category_name: str, topic: str, difficulty: str, num_questions: int) -> str:
+def _build_prompt(
+    category_name: str, subject: str, topic: str, difficulty: str, num_questions: int
+) -> str:
+    subject_line = f"Subject: {subject}\n" if subject else ""
     return (
         f"Generate {num_questions} multiple-choice questions for an educational quiz.\n\n"
         f"Audience / category: {category_name}\n"
+        f"{subject_line}"
         f"Chapter / topic: {topic}\n"
         f"Difficulty: {difficulty}\n\n"
         "Requirements:\n"
@@ -70,6 +74,7 @@ def generate_quiz(
     difficulty: str = "medium",
     num_questions: int = 10,
     marks_per_question: int = 1,
+    subject: str = "",
 ) -> dict:
     """
     Generate a quiz via Claude.
@@ -120,7 +125,9 @@ def generate_quiz(
             ),
             messages=[{
                 "role": "user",
-                "content": _build_prompt(category_name, topic, difficulty, num_questions),
+                "content": _build_prompt(
+                    category_name, (subject or "").strip(), topic, difficulty, num_questions
+                ),
             }],
             output_format=GeneratedQuiz,
         )
