@@ -1,6 +1,7 @@
 """
 Admin — Quiz Management
 POST   /api/admin/quiz/                   Create quiz shell
+POST   /api/admin/quiz/ai-generate        Generate a quiz with AI (Claude) — draft
 POST   /api/admin/quiz/{id}/upload        Upload Excel to add questions
 GET    /api/admin/quiz/                   List all quizzes
 GET    /api/admin/quiz/{id}               Get quiz with questions
@@ -18,10 +19,70 @@ from app.dependencies import require_admin
 from app.models.user import User
 from app.models.quiz import Quiz, QuizQuestion, QuizStatus, QuizAttempt, QuizAnswer
 from app.models.category import Category
-from app.schemas.quiz import QuizCreate, QuizResponse, QuizQuestionWithAnswer
+from app.schemas.quiz import QuizCreate, QuizResponse, QuizQuestionWithAnswer, AIQuizGenerate
 from app.services.excel_parser import parse_quiz_excel
+from app.services.ai_quiz_service import generate_quiz, AIQuizError
 
 router = APIRouter()
+
+
+@router.post("/ai-generate", response_model=QuizResponse)
+def ai_generate_quiz(
+    payload: AIQuizGenerate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a quiz with AI for a category + chapter/topic.
+
+    The generated quiz is saved as a DRAFT (never auto-published) so an admin can
+    review the questions and answers before publishing it to students.
+    """
+    cat = db.query(Category).filter(Category.id == payload.category_id).first()
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    topic = (payload.topic or "").strip()
+    if not topic:
+        raise HTTPException(status_code=422, detail="Chapter / topic is required")
+
+    try:
+        result = generate_quiz(
+            category_name=cat.name,
+            topic=topic,
+            difficulty=(payload.difficulty or "medium").strip(),
+            num_questions=payload.num_questions,
+            marks_per_question=payload.marks_per_question,
+        )
+    except AIQuizError as e:
+        # 502: upstream AI failure (bad key, API error, empty result)
+        raise HTTPException(status_code=502, detail=str(e))
+
+    questions_data = result["questions"]
+    if not questions_data:
+        raise HTTPException(status_code=502, detail="AI returned no questions. Try again.")
+
+    quiz = Quiz(
+        category_id=payload.category_id,
+        title=result["title"][:200],
+        description=f"AI-generated quiz on '{topic}' ({payload.difficulty}).",
+        duration_mins=payload.duration_mins,
+        pass_marks=payload.pass_marks,
+        total_marks=sum(q["marks"] for q in questions_data),
+        status=QuizStatus.DRAFT,
+        created_by=admin.id,
+    )
+    db.add(quiz)
+    db.commit()
+    db.refresh(quiz)
+
+    questions = [QuizQuestion(quiz_id=quiz.id, **q) for q in questions_data]
+    db.add_all(questions)
+    db.commit()
+
+    response = QuizResponse.from_orm(quiz)
+    response.question_count = len(questions)
+    return response
 
 
 @router.post("", response_model=QuizResponse)

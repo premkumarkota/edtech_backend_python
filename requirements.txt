@@ -32,3 +32,6 @@ openpyxl>=3.1.2
 # Background scheduler (session reminders)
 APScheduler>=3.10.0
 
+# AI quiz generation (Claude / Anthropic)
+anthropic>=0.69.0
+

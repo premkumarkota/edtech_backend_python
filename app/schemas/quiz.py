@@ -15,6 +15,17 @@ class QuizCreate(BaseModel):
     pass_marks: int = 0
 
 
+class AIQuizGenerate(BaseModel):
+    """Request body for AI-generated quizzes (admin panel)."""
+    category_id: int
+    topic: str                       # chapter / topic name the questions are about
+    difficulty: str = "medium"       # easy | medium | hard
+    num_questions: int = 10          # clamped 1..30 server-side
+    duration_mins: int = 30
+    pass_marks: int = 0
+    marks_per_question: int = 1
+
+
 class QuizResponse(BaseModel):
     id: int
     category_id: int
