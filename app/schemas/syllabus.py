@@ -33,6 +33,7 @@ class ChapterCreate(ChapterBase):
 class ChapterResponse(ChapterBase):
     id: int
     syllabus_id: int
+    content_published: bool = True
     contents: List[SyllabusContentResponse] = []
     created_at: datetime
     class Config:
@@ -69,6 +70,7 @@ class ChapterStudentResponse(ChapterBase):
     id: int
     syllabus_id: int
     created_at: datetime
+    content_published: bool = True
     contents: List[SyllabusContentResponse] = []
     hero_video: Optional[SyllabusContentResponse] = None
     document_contents: List[SyllabusContentResponse] = []

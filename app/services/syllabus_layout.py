@@ -15,7 +15,9 @@ from app.schemas.syllabus import (
 )
 
 
-def chapter_to_layout_response(ch: Chapter) -> ChapterStudentResponse:
+def chapter_to_layout_response(
+    ch: Chapter, include_unpublished: bool = False
+) -> ChapterStudentResponse:
     items = sorted(
         ch.contents,
         key=lambda c: (c.order_index or 0, c.id or 0),
@@ -29,11 +31,17 @@ def chapter_to_layout_response(ch: Chapter) -> ChapterStudentResponse:
     hero: Optional[SyllabusContent] = videos[0] if videos else None
     extra_videos = videos[1:] if len(videos) > 1 else []
 
+    published = getattr(ch, "content_published", True)
+    # Students only receive the content when it's published. Admin views
+    # (include_unpublished=True) always see it so they can review drafts.
+    description = ch.description if (include_unpublished or published) else None
+
     return ChapterStudentResponse(
         id=ch.id,
         syllabus_id=ch.syllabus_id,
         title=ch.title,
-        description=ch.description,
+        description=description,
+        content_published=published,
         order_index=ch.order_index or 0,
         created_at=ch.created_at,
         contents=[SyllabusContentResponse.model_validate(x) for x in items],
@@ -45,7 +53,9 @@ def chapter_to_layout_response(ch: Chapter) -> ChapterStudentResponse:
     )
 
 
-def syllabus_to_detail_with_layout(s: Syllabus) -> SyllabusDetailStudent:
+def syllabus_to_detail_with_layout(
+    s: Syllabus, include_unpublished: bool = False
+) -> SyllabusDetailStudent:
     chapters_in_order = sorted(
         s.chapters,
         key=lambda ch: (ch.order_index or 0, ch.id or 0),
@@ -59,5 +69,8 @@ def syllabus_to_detail_with_layout(s: Syllabus) -> SyllabusDetailStudent:
         is_active=s.is_active,
         created_at=s.created_at,
         chapter_count=len(s.chapters),
-        chapters=[chapter_to_layout_response(ch) for ch in chapters_in_order],
+        chapters=[
+            chapter_to_layout_response(ch, include_unpublished=include_unpublished)
+            for ch in chapters_in_order
+        ],
     )

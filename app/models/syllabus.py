@@ -42,6 +42,10 @@ class Chapter(Base):
     order_index = Column(Integer, default=0)
     difficulty  = Column(String(10), default="medium")  # easy | medium | hard
     estimated_minutes = Column(Integer, default=45)     # estimated study time
+    # Review gate for AI-generated content: students only see `description`
+    # when this is True. Generating/editing content sets it False (draft).
+    content_published = Column(Boolean, default=True, nullable=False,
+                               server_default="true")
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

@@ -102,7 +102,7 @@ def get_syllabus_detail(
     )
     if not s:
         raise HTTPException(status_code=404, detail="Syllabus not found")
-    return syllabus_to_detail_with_layout(s)
+    return syllabus_to_detail_with_layout(s, include_unpublished=True)
 
 @router.put("/{syllabus_id}", response_model=SyllabusSummary)
 async def update_syllabus(
@@ -186,6 +186,42 @@ def update_chapter(
         c.title = payload.title
     if payload.description is not None:
         c.description = payload.description
+        # Editing content sends it back to draft — must be re-published.
+        c.content_published = False
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+@router.post("/chapters/{chapter_id}/publish-content", response_model=ChapterResponse)
+def publish_chapter_content(
+    chapter_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Publish a chapter's content so students can see it."""
+    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    if not (c.description or "").strip():
+        raise HTTPException(status_code=400, detail="No content to publish")
+    c.content_published = True
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+@router.post("/chapters/{chapter_id}/unpublish-content", response_model=ChapterResponse)
+def unpublish_chapter_content(
+    chapter_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Hide a chapter's content from students (revert to draft)."""
+    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    c.content_published = False
     db.commit()
     db.refresh(c)
     return c
@@ -229,6 +265,7 @@ def ai_generate_chapter_content(
         raise HTTPException(status_code=502, detail=str(e))
 
     c.description = content
+    c.content_published = False  # draft — admin must review & publish
     db.commit()
     db.refresh(c)
     return c
@@ -366,7 +403,7 @@ def reorder_chapter_contents(
         .filter(Chapter.id == chapter_id)
         .first()
     )
-    return chapter_to_layout_response(ch2)
+    return chapter_to_layout_response(ch2, include_unpublished=True)
 
 
 @router.delete("/content/{content_id}")
