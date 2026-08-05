@@ -20,7 +20,10 @@ from app.schemas.syllabus import (
 from app.schemas.syllabus_admin_requests import (
     ReorderChapterContentsRequest,
     SyllabusContentPatch,
+    ChapterPatch,
+    AIChapterContentRequest,
 )
+from app.services.ai_content_service import generate_content, AIContentError
 from app.services.syllabus_layout import syllabus_to_detail_with_layout, chapter_to_layout_response
 from app.services.storage_service import (
     upload_file,
@@ -166,6 +169,69 @@ def delete_chapter(chapter_id: int, db: Session = Depends(get_db), admin: User =
     db.delete(c)
     db.commit()
     return {"message": "Deleted"}
+
+
+@router.patch("/chapters/{chapter_id}", response_model=ChapterResponse)
+def update_chapter(
+    chapter_id: int,
+    payload: ChapterPatch,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Update a chapter's title and/or content (description)."""
+    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    if payload.title is not None:
+        c.title = payload.title
+    if payload.description is not None:
+        c.description = payload.description
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+@router.post("/chapters/{chapter_id}/ai-content", response_model=ChapterResponse)
+def ai_generate_chapter_content(
+    chapter_id: int,
+    payload: AIChapterContentRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """
+    Generate rich Markdown study content for a chapter with AI and save it to the
+    chapter's description. Category & subject are derived from the chapter.
+    """
+    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    topic = (payload.topic or "").strip()
+    if not topic:
+        raise HTTPException(status_code=422, detail="Topic is required")
+
+    syllabus = db.query(Syllabus).filter(Syllabus.id == c.syllabus_id).first()
+    subject_name = syllabus.title if syllabus else ""
+    category_name = ""
+    if syllabus:
+        cat = db.query(Category).filter(Category.id == syllabus.category_id).first()
+        category_name = cat.name if cat else ""
+
+    try:
+        content = generate_content(
+            category_name=category_name,
+            subject=subject_name,
+            chapter=c.title,
+            topic=topic,
+            level=(payload.level or "General").strip(),
+        )
+    except AIContentError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    c.description = content
+    db.commit()
+    db.refresh(c)
+    return c
 
 # --- Content ---
 @router.post("/chapters/{chapter_id}/content", response_model=SyllabusContentResponse)
