@@ -65,8 +65,21 @@ def ai_generate_quiz(
     if not questions_data:
         raise HTTPException(status_code=502, detail="AI returned no questions. Try again.")
 
+    # Link to a subject (syllabus) when provided & valid for this category,
+    # so the student app can group quizzes subject-wise.
+    syllabus_id = None
+    if payload.syllabus_id:
+        from app.models.syllabus import Syllabus
+        syl = db.query(Syllabus).filter(
+            Syllabus.id == payload.syllabus_id,
+            Syllabus.category_id == payload.category_id,
+        ).first()
+        if syl:
+            syllabus_id = syl.id
+
     quiz = Quiz(
         category_id=payload.category_id,
+        syllabus_id=syllabus_id,
         title=result["title"][:200],
         description=(
             f"AI-generated quiz on '{topic}'"

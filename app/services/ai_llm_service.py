@@ -1,31 +1,49 @@
 """
-AI LLM Service — Handles communication with Azure OpenAI / OpenAI API.
+AI LLM Service — talks to Anthropic (Claude) via the official SDK.
 
-Configuration:
-    LLM_BASE_URL  — Azure endpoint or OpenAI base URL
-    LLM_API_KEY   — API key
-    LLM_MODEL     — Deployment/model name (e.g., "gpt-4o", "gpt-4o-mini")
+Used by the AI Study Planner and the AI chat bot. The public functions
+`chat_completion` and `chat_completion_json` keep the same signatures they had
+under the old Azure/OpenAI implementation, so all callers work unchanged.
 
-Works with both Azure OpenAI and standard OpenAI API (same chat completions format).
+Configuration (app/config.py / .env.dev):
+    ANTHROPIC_API_KEY  — Claude API key (sk-ant-...)
+    ANTHROPIC_MODEL    — model id (default "claude-sonnet-5")
 """
 import logging
 import json
 from typing import Optional
-
-import httpx
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _get_llm_config() -> dict:
-    """Get LLM configuration from settings."""
-    return {
-        "base_url": getattr(settings, "LLM_BASE_URL", ""),
-        "api_key": getattr(settings, "LLM_API_KEY", ""),
-        "model": getattr(settings, "LLM_MODEL", "gpt-4o-mini"),
-    }
+def _split_system_and_conversation(messages: list[dict]) -> tuple[str, list[dict]]:
+    """
+    Anthropic keeps the system prompt separate from the message list, and the
+    message list must start with a 'user' turn. Split OpenAI-style messages
+    (which put system inside the list) into (system_text, conversation).
+    """
+    system_parts: list[str] = []
+    conversation: list[dict] = []
+
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content", "")
+        if content is None:
+            content = ""
+        if role == "system":
+            if content:
+                system_parts.append(str(content))
+        else:
+            conversation.append({"role": role, "content": str(content)})
+
+    # Drop any leading assistant turns — Anthropic requires the first message
+    # to be from the user.
+    while conversation and conversation[0]["role"] != "user":
+        conversation.pop(0)
+
+    return "\n\n".join(system_parts).strip(), conversation
 
 
 def chat_completion(
@@ -35,84 +53,67 @@ def chat_completion(
     response_format: Optional[dict] = None,
 ) -> Optional[str]:
     """
-    Send a chat completion request to Azure OpenAI / OpenAI.
+    Send a chat completion request to Claude.
 
     Args:
         messages: List of {"role": "system"|"user"|"assistant", "content": "..."}
-        temperature: Creativity (0.0 = deterministic, 1.0 = creative)
-        max_tokens: Max response length
-        response_format: Optional {"type": "json_object"} for JSON mode
+        temperature: Ignored (current Claude models reject sampling params); kept
+                     for signature compatibility with existing callers.
+        max_tokens: Max response length.
+        response_format: If {"type": "json_object"}, Claude is instructed to
+                         return JSON only.
 
     Returns:
-        Assistant's reply content string, or None on failure.
+        Assistant reply text, or None on failure.
     """
-    config = _get_llm_config()
-
-    if not config["base_url"] or not config["api_key"]:
-        logger.error("LLM_BASE_URL or LLM_API_KEY not configured.")
+    api_key = (getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY not configured.")
         return None
-
-    # Build the request URL
-    base_url = config["base_url"].rstrip("/")
-
-    # Azure OpenAI uses: {base_url}/openai/deployments/{model}/chat/completions?api-version=...
-    # Standard OpenAI uses: {base_url}/chat/completions
-    # Detect Azure by checking common Azure domain patterns
-    is_azure = any(domain in base_url for domain in [
-        "openai.azure.com",
-        "cognitiveservices.azure.com",
-        "services.ai.azure.com",
-        ".azure.com",
-    ])
-
-    if is_azure:
-        # Azure OpenAI / Azure AI format
-        api_version = getattr(settings, "LLM_API_VERSION", "2024-12-01-preview")
-        # If URL already contains /openai/, don't add it again
-        if "/openai/" in base_url:
-            url = f"{base_url}/deployments/{config['model']}/chat/completions?api-version={api_version}"
-        else:
-            url = f"{base_url}/openai/deployments/{config['model']}/chat/completions?api-version={api_version}"
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": config["api_key"],
-        }
-    else:
-        # Standard OpenAI-compatible format
-        url = f"{base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {config['api_key']}",
-        }
-
-    logger.info(f"LLM request: is_azure={is_azure}, url={url[:80]}...")
-
-    payload = {
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-
-    if not is_azure:
-        payload["model"] = config["model"]
-
-    if response_format:
-        payload["response_format"] = response_format
 
     try:
-        with httpx.Client(timeout=30.0) as client:
-            response = client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
-
-    except httpx.HTTPStatusError as e:
-        logger.error(f"LLM API error {e.response.status_code}: {e.response.text[:500]}")
+        import anthropic
+    except ImportError:
+        logger.error("The 'anthropic' package is not installed. Run: pip install anthropic")
         return None
+
+    model = (getattr(settings, "ANTHROPIC_MODEL", "") or "claude-sonnet-5").strip()
+
+    system_text, conversation = _split_system_and_conversation(messages)
+    if not conversation:
+        logger.error("chat_completion called with no user message.")
+        return None
+
+    if response_format and response_format.get("type") == "json_object":
+        json_instruction = (
+            "Respond with ONLY valid JSON. Do not include any prose, explanations, "
+            "or markdown code fences."
+        )
+        system_text = f"{system_text}\n\n{json_instruction}".strip()
+
+    kwargs = {
+        "model": model,
+        "max_tokens": max_tokens,
+        # Disabled: these are short, well-scoped utility calls — keeps the full
+        # token budget for the answer and responses fast. (Sampling params like
+        # temperature are not supported on current Claude models.)
+        "thinking": {"type": "disabled"},
+        "messages": conversation,
+    }
+    if system_text:
+        kwargs["system"] = system_text
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(**kwargs)
     except Exception as e:
-        logger.error(f"LLM request failed: {e}")
+        logger.error(f"Claude request failed: {e}")
         return None
+
+    text = "".join(
+        block.text for block in response.content if getattr(block, "type", None) == "text"
+    ).strip()
+    return text or None
 
 
 def chat_completion_json(
@@ -122,7 +123,6 @@ def chat_completion_json(
 ) -> Optional[dict]:
     """
     Same as chat_completion but expects and parses a JSON response.
-    Uses JSON mode if available, otherwise parses from text.
     """
     result = chat_completion(
         messages=messages,
@@ -144,5 +144,5 @@ def chat_completion_json(
         elif "```" in result:
             json_str = result.split("```")[1].split("```")[0].strip()
             return json.loads(json_str)
-        logger.error(f"Failed to parse LLM JSON response: {result[:200]}")
+        logger.error(f"Failed to parse Claude JSON response: {result[:200]}")
         return None
