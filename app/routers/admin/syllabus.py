@@ -23,7 +23,7 @@ from app.schemas.syllabus_admin_requests import (
     ChapterPatch,
     AIChapterContentRequest,
 )
-from app.services.ai_content_service import generate_content, AIContentError
+from app.services.ai_content_service import generate_content, refine_content, AIContentError
 from app.services.syllabus_layout import syllabus_to_detail_with_layout, chapter_to_layout_response
 from app.services.storage_service import (
     upload_file,
@@ -243,7 +243,14 @@ def ai_generate_chapter_content(
         raise HTTPException(status_code=404, detail="Chapter not found")
 
     topic = (payload.topic or "").strip()
-    if not topic:
+    instruction = (payload.instruction or "").strip()
+    current = (c.description or "").strip()
+    level = (payload.level or "General").strip()
+
+    # Refine existing content when an instruction is given and content exists;
+    # otherwise generate fresh content (which needs a topic).
+    is_refine = bool(instruction and current)
+    if not is_refine and not topic:
         raise HTTPException(status_code=422, detail="Topic is required")
 
     syllabus = db.query(Syllabus).filter(Syllabus.id == c.syllabus_id).first()
@@ -254,13 +261,22 @@ def ai_generate_chapter_content(
         category_name = cat.name if cat else ""
 
     try:
-        content = generate_content(
-            category_name=category_name,
-            subject=subject_name,
-            chapter=c.title,
-            topic=topic,
-            level=(payload.level or "General").strip(),
-        )
+        if is_refine:
+            content = refine_content(
+                current_content=current,
+                instruction=instruction,
+                level=level,
+                subject=subject_name,
+                chapter=c.title,
+            )
+        else:
+            content = generate_content(
+                category_name=category_name,
+                subject=subject_name,
+                chapter=c.title,
+                topic=topic,
+                level=level,
+            )
     except AIContentError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

@@ -23,6 +23,9 @@ class ChapterPatch(BaseModel):
 
 
 class AIChapterContentRequest(BaseModel):
-    """Generate rich chapter content (Markdown) with AI."""
-    topic: str
+    """Generate or refine rich chapter content (Markdown) with AI."""
+    topic: Optional[str] = None
     level: str = "General"   # e.g. "Class 6-8", "Class 11-12", "B.Tech"
+    # When provided (and the chapter already has content), the AI REFINES the
+    # existing content with this instruction instead of generating from scratch.
+    instruction: Optional[str] = None

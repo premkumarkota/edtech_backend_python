@@ -62,16 +62,29 @@ def _build_prompt(
     return "\n".join(parts)
 
 
-def generate_content(
-    category_name: str,
-    subject: str,
-    chapter: str,
-    topic: str,
-    level: str,
+def _build_refine_prompt(
+    current_content: str, instruction: str, level: str, subject: str, chapter: str
 ) -> str:
-    """
-    Generate rich Markdown chapter content. Raises AIContentError on failure.
-    """
+    ctx = []
+    if subject:
+        ctx.append(f"Subject: {subject}")
+    if chapter:
+        ctx.append(f"Chapter: {chapter}")
+    ctx.append(f"Level: {level}")
+    header = "\n".join(ctx)
+    return (
+        "Here is the current study content (Markdown):\n\n"
+        f"---\n{current_content}\n---\n\n"
+        f"{header}\n\n"
+        f'Revise the content according to this instruction:\n"{instruction}"\n\n'
+        "Apply the requested change while keeping the rest coherent and intact. Follow ALL the "
+        "same formatting rules (headings/sub-headings, plain-text equations, and at least one "
+        "mandatory ASCII flowchart in a fenced code block). Output ONLY the full revised Markdown."
+    )
+
+
+def _call_claude(user_prompt: str, empty_msg: str) -> str:
+    """Shared Claude call for generate + refine. Raises AIContentError on failure."""
     api_key = (getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
     if not api_key:
         raise AIContentError(
@@ -86,11 +99,6 @@ def generate_content(
         ) from e
 
     model = (getattr(settings, "ANTHROPIC_MODEL", "") or "claude-sonnet-5").strip()
-    topic = (topic or "").strip()
-    level = (level or "General").strip()
-    if not topic:
-        raise AIContentError("Topic is required.")
-
     client = anthropic.Anthropic(api_key=api_key)
     try:
         response = client.messages.create(
@@ -98,20 +106,54 @@ def generate_content(
             max_tokens=8000,
             thinking={"type": "disabled"},
             system=_SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": _build_prompt(
-                    category_name or "", subject or "", chapter or "", topic, level
-                ),
-            }],
+            messages=[{"role": "user", "content": user_prompt}],
         )
     except Exception as e:
-        logger.error(f"AI content generation failed: {e}")
+        logger.error(f"AI content call failed: {e}")
         raise AIContentError(f"AI generation failed: {e}") from e
 
     text = "".join(
         block.text for block in response.content if getattr(block, "type", None) == "text"
     ).strip()
     if not text:
-        raise AIContentError("The AI returned empty content. Try again or refine the topic.")
+        raise AIContentError(empty_msg)
     return text
+
+
+def generate_content(
+    category_name: str,
+    subject: str,
+    chapter: str,
+    topic: str,
+    level: str,
+) -> str:
+    """Generate rich Markdown chapter content from scratch."""
+    topic = (topic or "").strip()
+    level = (level or "General").strip()
+    if not topic:
+        raise AIContentError("Topic is required.")
+    return _call_claude(
+        _build_prompt(category_name or "", subject or "", chapter or "", topic, level),
+        "The AI returned empty content. Try again or refine the topic.",
+    )
+
+
+def refine_content(
+    current_content: str,
+    instruction: str,
+    level: str = "General",
+    subject: str = "",
+    chapter: str = "",
+) -> str:
+    """Revise existing Markdown content according to an admin instruction."""
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise AIContentError("Instruction is required.")
+    if not (current_content or "").strip():
+        raise AIContentError("There is no existing content to refine.")
+    return _call_claude(
+        _build_refine_prompt(
+            current_content, instruction, (level or "General").strip(), subject or "", chapter or ""
+        ),
+        "The AI returned empty content. Try rephrasing your instruction.",
+    )
