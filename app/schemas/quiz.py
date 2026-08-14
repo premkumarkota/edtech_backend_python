@@ -64,8 +64,8 @@ class ChapterQuizGenerate(BaseModel):
 class MockTestGenerate(BaseModel):
     """Generate a mock test with AI from a chosen scope."""
     category_id: int
-    syllabus_id: int                   # subject
-    chapter_ids: List[int] = []        # empty => whole subject (all chapters)
+    syllabus_ids: List[int] = []       # one or more subjects
+    chapter_ids: List[int] = []        # empty => all chapters of the subjects
     term: Optional[str] = None         # quarterly | half_yearly | annual (label)
     title: Optional[str] = None
     num_questions: int = 30

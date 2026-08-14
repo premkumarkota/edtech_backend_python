@@ -59,17 +59,25 @@ def ai_generate_mock_test(
     cat = db.query(Category).filter(Category.id == payload.category_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="Category not found")
-    syl = db.query(Syllabus).filter(
-        Syllabus.id == payload.syllabus_id,
-        Syllabus.category_id == payload.category_id,
-    ).first()
-    if not syl:
-        raise HTTPException(status_code=404, detail="Subject not found in this category")
+
+    if not payload.syllabus_ids:
+        raise HTTPException(status_code=422, detail="Select at least one subject")
+    subjects = (
+        db.query(Syllabus)
+        .filter(
+            Syllabus.id.in_(payload.syllabus_ids),
+            Syllabus.category_id == payload.category_id,
+        )
+        .all()
+    )
+    if not subjects:
+        raise HTTPException(status_code=404, detail="Subjects not found in this category")
+    subject_ids = [s.id for s in subjects]
 
     all_chapters = (
         db.query(Chapter)
-        .filter(Chapter.syllabus_id == syl.id)
-        .order_by(Chapter.order_index, Chapter.id)
+        .filter(Chapter.syllabus_id.in_(subject_ids))
+        .order_by(Chapter.syllabus_id, Chapter.order_index, Chapter.id)
         .all()
     )
     if payload.chapter_ids:
@@ -78,12 +86,19 @@ def ai_generate_mock_test(
     else:
         chapters = all_chapters
     if not chapters:
-        raise HTTPException(status_code=422, detail="Select at least one chapter")
+        raise HTTPException(status_code=422, detail="No chapters found for the selected subjects")
 
     outlines = [
         {"title": ch.title, "content": (ch.description or "")[:_CONTENT_CHARS_PER_CHAPTER]}
         for ch in chapters
     ]
+
+    subject_titles = [s.title for s in subjects]
+    subject_label = (
+        ", ".join(subject_titles)
+        if len(subject_titles) <= 2
+        else f"{len(subject_titles)} Subjects"
+    )
 
     term = (payload.term or "").strip() or None
     if term:
@@ -92,6 +107,9 @@ def ai_generate_mock_test(
     elif len(chapters) < len(all_chapters):
         mock_scope = "chapters"
         scope_label = f"{len(chapters)} Chapters"
+    elif len(subjects) > 1:
+        mock_scope = "subject"
+        scope_label = "Multiple Subjects"
     else:
         mock_scope = "subject"
         scope_label = "Full Subject"
@@ -103,7 +121,7 @@ def ai_generate_mock_test(
             num_questions=payload.num_questions,
             difficulty=payload.difficulty,
             marks_per_question=1,
-            subject=syl.title,
+            subject=subject_label,
         )
     except AIQuizError as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -117,16 +135,16 @@ def ai_generate_mock_test(
         if payload.pass_marks and payload.pass_marks > 0
         else max(1, round(total * 0.33))  # exam-style pass ~33%
     )
-    title = (payload.title or result["title"] or f"{syl.title} — {scope_label}").strip()
+    title = (payload.title or result["title"] or f"{subject_label} — {scope_label}").strip()
 
     quiz = Quiz(
         category_id=payload.category_id,
-        syllabus_id=syl.id,
+        syllabus_id=subjects[0].id,   # primary subject (for student grouping)
         quiz_type="mock",
         mock_scope=mock_scope,
         term=term,
         title=title[:200],
-        description=f"Mock test — {syl.title} · {scope_label}",
+        description=f"Mock test — {subject_label} · {scope_label}",
         duration_mins=payload.duration_mins,
         total_marks=total,
         pass_marks=pass_marks,
