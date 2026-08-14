@@ -24,6 +24,9 @@ from app.schemas.syllabus_admin_requests import (
     AIChapterContentRequest,
 )
 from app.services.ai_content_service import generate_content, refine_content, AIContentError
+from app.models.quiz import Quiz, QuizQuestion, QuizStatus
+from app.schemas.quiz import ChapterQuizGenerate, QuizResponse, QuizQuestionWithAnswer
+from app.services.ai_quiz_service import generate_from_content, AIQuizError
 from app.services.syllabus_layout import syllabus_to_detail_with_layout, chapter_to_layout_response
 from app.services.storage_service import (
     upload_file,
@@ -225,6 +228,119 @@ def unpublish_chapter_content(
     db.commit()
     db.refresh(c)
     return c
+
+
+# --- Chapter Quiz (generated from the chapter's content) ---
+
+def _chapter_quiz_payload(db: Session, chapter_id: int) -> dict:
+    quiz = (
+        db.query(Quiz)
+        .filter(Quiz.chapter_id == chapter_id, Quiz.quiz_type == "chapter")
+        .order_by(Quiz.created_at.desc())
+        .first()
+    )
+    if not quiz:
+        return {"quiz": None, "questions": []}
+    r = QuizResponse.from_orm(quiz)
+    r.question_count = len(quiz.questions)
+    qs = sorted(quiz.questions, key=lambda x: x.order_index)
+    return {
+        "quiz": r,
+        "questions": [QuizQuestionWithAnswer.from_orm(q).dict() for q in qs],
+    }
+
+
+@router.get("/chapters/{chapter_id}/quiz")
+def get_chapter_quiz(
+    chapter_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Return the chapter's quiz (with questions + answers) or {quiz: null}."""
+    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return _chapter_quiz_payload(db, chapter_id)
+
+
+@router.post("/chapters/{chapter_id}/ai-quiz")
+def ai_generate_chapter_quiz(
+    chapter_id: int,
+    payload: ChapterQuizGenerate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """
+    Generate a chapter quiz FROM the chapter's content (draft). Replaces any
+    existing chapter quiz for this chapter.
+    """
+    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    content = (c.description or "").strip()
+    if not content:
+        raise HTTPException(
+            status_code=422,
+            detail="Generate the chapter content first — the quiz is created from it.",
+        )
+
+    syllabus = db.query(Syllabus).filter(Syllabus.id == c.syllabus_id).first()
+    if not syllabus:
+        raise HTTPException(status_code=400, detail="Chapter has no subject")
+    subject_name = syllabus.title
+
+    try:
+        result = generate_from_content(
+            content=content,
+            num_questions=payload.num_questions,
+            difficulty=payload.difficulty,
+            marks_per_question=payload.marks_per_question,
+            subject=subject_name,
+            chapter=c.title,
+        )
+    except AIQuizError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    questions_data = result["questions"]
+    if not questions_data:
+        raise HTTPException(status_code=502, detail="AI returned no questions. Try again.")
+    total = sum(q["marks"] for q in questions_data)
+    pass_marks = (
+        payload.pass_marks
+        if payload.pass_marks and payload.pass_marks > 0
+        else max(1, round(total * 0.6))
+    )
+
+    # One chapter quiz per chapter — remove the old one (cascade deletes its
+    # questions/attempts).
+    for old in (
+        db.query(Quiz)
+        .filter(Quiz.chapter_id == chapter_id, Quiz.quiz_type == "chapter")
+        .all()
+    ):
+        db.delete(old)
+    db.flush()
+
+    quiz = Quiz(
+        category_id=syllabus.category_id,
+        syllabus_id=c.syllabus_id,
+        chapter_id=chapter_id,
+        title=result["title"][:200],
+        description=f"Chapter quiz for {c.title}",
+        quiz_type="chapter",
+        duration_mins=max(5, len(questions_data)),
+        total_marks=total,
+        pass_marks=pass_marks,
+        require_pass=payload.require_pass,
+        status=QuizStatus.DRAFT,
+        created_by=admin.id,
+    )
+    db.add(quiz)
+    db.commit()
+    db.refresh(quiz)
+    db.add_all([QuizQuestion(quiz_id=quiz.id, **q) for q in questions_data])
+    db.commit()
+    return _chapter_quiz_payload(db, chapter_id)
 
 
 @router.post("/chapters/{chapter_id}/ai-content", response_model=ChapterResponse)

@@ -28,6 +28,7 @@ from app.routers.admin import categories as admin_categories
 from app.routers.admin import teachers as admin_teachers
 from app.routers.admin import syllabus as admin_syllabus
 from app.routers.admin import quiz as admin_quiz
+from app.routers.admin import mock_tests as admin_mock_tests
 from app.routers.admin import plans as admin_plans
 from app.routers.admin import subscriptions as admin_subscriptions
 from app.routers.admin import payouts as admin_payouts
@@ -151,6 +152,10 @@ app.include_router(admin_teachers.router,
 app.include_router(admin_syllabus.router,
                    prefix="/api/admin/syllabus",
                    tags=["Admin - Syllabus"])
+
+app.include_router(admin_mock_tests.router,
+                   prefix="/api/admin/mock-tests",
+                   tags=["Admin - Mock Tests"])
 
 app.include_router(admin_quiz.router,
                    prefix="/api/admin/quiz",

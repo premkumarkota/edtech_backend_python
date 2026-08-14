@@ -1,6 +1,6 @@
 import enum
 from sqlalchemy import (Column, Integer, String, Text, Boolean, Float,
-                         DateTime, ForeignKey, Enum, CHAR)
+                         DateTime, ForeignKey, Enum, CHAR, UniqueConstraint)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -31,6 +31,18 @@ class Quiz(Base):
     duration_mins = Column(Integer, default=30)
     total_marks   = Column(Integer, default=0)
     pass_marks    = Column(Integer, default=0)
+    # Assessment tier: 'chapter' (formative, from chapter content) or
+    # 'mock' (summative, spans chapters/subject/term).
+    quiz_type     = Column(String(10), default="mock", nullable=False,
+                           server_default="mock", index=True)
+    mock_scope    = Column(String(20), nullable=True)   # chapters | subject | term
+    term          = Column(String(20), nullable=True)   # quarterly | half_yearly | annual
+    # Chapter quiz: if True, a student must score >= pass_marks to complete the
+    # chapter; failing forces a retake.
+    require_pass  = Column(Boolean, default=False, nullable=False,
+                           server_default="false")
+    negative_marking = Column(Boolean, default=False, nullable=False,
+                              server_default="false")
     status        = Column(
         Enum(QuizStatus, values_callable=lambda x: [e.value for e in x]),
         default=QuizStatus.DRAFT.value,
@@ -115,3 +127,33 @@ class QuizAnswer(Base):
     # Relationships
     attempt  = relationship("QuizAttempt", back_populates="answers")
     question = relationship("QuizQuestion")
+
+
+class MockTestChapter(Base):
+    """Chapters covered by a mock test (quiz_type='mock', scope='chapters')."""
+    __tablename__ = "mock_test_chapters"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    quiz_id    = Column(Integer, ForeignKey("quizzes.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    chapter_id = Column(Integer, ForeignKey("chapters.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+
+
+class ChapterProgress(Base):
+    """Per-student chapter progress: content read + chapter-quiz pass state."""
+    __tablename__ = "chapter_progress"
+    __table_args__ = (
+        UniqueConstraint("student_id", "chapter_id", name="uq_chapter_progress"),
+    )
+
+    id                   = Column(Integer, primary_key=True, index=True)
+    student_id           = Column(Integer, ForeignKey("users.id"),
+                                  nullable=False, index=True)
+    chapter_id           = Column(Integer, ForeignKey("chapters.id"),
+                                  nullable=False, index=True)
+    content_read_at      = Column(DateTime(timezone=True), nullable=True)
+    quiz_passed          = Column(Boolean, default=False, nullable=False)
+    quiz_best_percentage = Column(Float, nullable=True)
+    updated_at           = Column(DateTime(timezone=True),
+                                  server_default=func.now(), onupdate=func.now())

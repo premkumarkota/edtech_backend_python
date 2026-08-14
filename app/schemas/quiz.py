@@ -38,6 +38,11 @@ class QuizResponse(BaseModel):
     duration_mins: int
     total_marks: int
     pass_marks: int
+    quiz_type: str = "mock"
+    mock_scope: Optional[str] = None
+    term: Optional[str] = None
+    require_pass: bool = False
+    negative_marking: bool = False
     status: str
     created_by: Optional[int] = None
     question_count: int = 0
@@ -45,6 +50,29 @@ class QuizResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ChapterQuizGenerate(BaseModel):
+    """Generate a chapter quiz FROM the chapter's content."""
+    num_questions: int = 8
+    difficulty: str = "mixed"          # easy | medium | hard | mixed
+    marks_per_question: int = 1
+    pass_marks: int = 0                # threshold; 0 = auto (60% of total)
+    require_pass: bool = True          # fail => student must retake
+
+
+class MockTestGenerate(BaseModel):
+    """Generate a mock test with AI from a chosen scope."""
+    category_id: int
+    syllabus_id: int                   # subject
+    chapter_ids: List[int] = []        # empty => whole subject (all chapters)
+    term: Optional[str] = None         # quarterly | half_yearly | annual (label)
+    title: Optional[str] = None
+    num_questions: int = 30
+    difficulty: str = "mixed"
+    duration_mins: int = 60
+    pass_marks: int = 0
+    negative_marking: bool = False
 
 
 # ── QuizQuestion ──────────────────────────────────────────────────

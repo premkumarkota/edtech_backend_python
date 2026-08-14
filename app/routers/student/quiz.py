@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from app.database import get_db
 from app.dependencies import require_student
 from app.models.user import User
-from app.models.quiz import Quiz, QuizQuestion, QuizAttempt, QuizAnswer, QuizStatus, AttemptStatus
+from app.models.quiz import Quiz, QuizQuestion, QuizAttempt, QuizAnswer, QuizStatus, AttemptStatus, ChapterProgress
 from app.schemas.quiz import (
     QuizResponse, QuizQuestionResponse, QuizAttemptResponse,
     QuizSubmit, QuizResultResponse, LeaderboardEntry, GlobalRankEntry
@@ -30,7 +30,8 @@ def list_quizzes(
 
     query = db.query(Quiz).filter(
         Quiz.category_id == effective_category_id,
-        Quiz.status == QuizStatus.PUBLISHED
+        Quiz.status == QuizStatus.PUBLISHED,
+        Quiz.quiz_type == "mock",   # chapter quizzes live inside the chapter, not here
     )
     
     if syllabus_id:
@@ -180,14 +181,37 @@ def submit_quiz(
     attempt.completed_at = datetime.now(timezone.utc)
     attempt.time_taken_secs = time_taken_secs
 
-    db.commit()
-    
     # Update total points in profile
     if student.student_profile:
         student.student_profile.total_points += score
-        db.commit()
-        
-    return {"score": score, "total": total, "passed": attempt.passed}
+
+    # Chapter quiz → update chapter progress + enforce the pass gate.
+    must_retake = False
+    if quiz.quiz_type == "chapter" and quiz.chapter_id:
+        prog = db.query(ChapterProgress).filter(
+            ChapterProgress.student_id == student.id,
+            ChapterProgress.chapter_id == quiz.chapter_id,
+        ).first()
+        if not prog:
+            prog = ChapterProgress(student_id=student.id, chapter_id=quiz.chapter_id)
+            db.add(prog)
+        pct = attempt.percentage or 0
+        if prog.quiz_best_percentage is None or pct > prog.quiz_best_percentage:
+            prog.quiz_best_percentage = pct
+        if attempt.passed:
+            prog.quiz_passed = True
+        must_retake = bool(quiz.require_pass and not prog.quiz_passed)
+
+    db.commit()
+
+    return {
+        "score": score,
+        "total": total,
+        "passed": attempt.passed,
+        "pass_marks": quiz.pass_marks,
+        "require_pass": quiz.require_pass,
+        "must_retake": must_retake,
+    }
 
 @router.get("/attempt/{attempt_id}/result")
 def get_result(attempt_id: int, student: User = Depends(require_student), db: Session = Depends(get_db)):
