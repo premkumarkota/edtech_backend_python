@@ -30,6 +30,14 @@ _DIFFICULTY_MULTIPLIERS = {
 
 _DEFAULT_CHAPTER_MINS = 45
 
+# Students are largely in India — anchor "today" to IST so the plan starts on
+# the correct local day (matches the student router).
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _ist_today() -> date:
+    return datetime.now(_IST).date()
+
 # Session type labels used in the cycle
 _SESSION_LEARN = "Learn"
 _SESSION_PRACTICE = "Practice"
@@ -61,9 +69,9 @@ def calculate_feasibility(
     Returns feasibility info dict.
     """
     if start_date is None:
-        start_date = date.today()
+        start_date = _ist_today()
 
-    total_days = (target_date - start_date).days
+    total_days = (target_date - start_date).days + 1
     if total_days <= 0:
         return {
             "is_feasible": False,
@@ -263,44 +271,51 @@ def generate_calendar(
     sorted_slots = sorted(time_slots, key=lambda s: (s.start_time.hour, s.start_time.minute))
     slots_count = len(sorted_slots)
 
-    # Calculate total available slots
-    start_date = date.today()
-    total_days = (goal.target_date - start_date).days
+    # Study window: today (IST) through the target date, inclusive.
+    start_date = _ist_today()
+    total_days = (goal.target_date - start_date).days + 1
     if total_days <= 0:
         total_days = 1
-    total_available_slots = total_days * slots_count
+    capacity = total_days * slots_count
 
-    # Expand units into multiple sessions if we have more days than chapters
-    if len(study_units) < total_available_slots:
-        expanded = _expand_units_to_sessions(study_units, total_available_slots)
+    # Expand units into Learn/Practice/Revise sessions when there's room, so the
+    # plan meaningfully fills the window up to the target date.
+    if len(study_units) < capacity:
+        expanded = _expand_units_to_sessions(study_units, capacity)
     else:
         expanded = study_units
 
-    # Interleave by subject for variety
     interleaved = _round_robin_interleave(expanded)
-
-    # Calculate gap between sessions to spread evenly
     num_sessions = len(interleaved)
-    if num_sessions <= total_available_slots:
-        # Spread sessions evenly across available slots
-        gap = total_available_slots / num_sessions
-    else:
-        gap = 1  # pack tightly if too many sessions
+    if num_sessions == 0:
+        return []
 
+    # Distribute sessions EVENLY across the whole window (today → target). Each
+    # session i is anchored to a day proportional to its position, then packed
+    # into that day's slots (rolling forward if a day is already full). This
+    # guarantees the plan spans right up to the target date instead of clustering
+    # early or scattering with large empty gaps.
+    per_day_count: dict[int, int] = {}
     entries = []
     for i, unit in enumerate(interleaved):
-        # Calculate which slot index this session goes to
-        target_slot_idx = int(i * gap)
-        day_offset = target_slot_idx // slots_count
-        slot_in_day = target_slot_idx % slots_count
+        if num_sessions > 1:
+            day_offset = round(i * (total_days - 1) / (num_sessions - 1))
+        else:
+            day_offset = 0
+
+        # Respect per-day slot capacity; roll forward to the next free day.
+        while day_offset < total_days and per_day_count.get(day_offset, 0) >= slots_count:
+            day_offset += 1
+        if day_offset >= total_days:
+            break  # window is full to capacity before the target date
+
+        slot_in_day = per_day_count.get(day_offset, 0)
+        per_day_count[day_offset] = slot_in_day + 1
 
         entry_date = start_date + timedelta(days=day_offset)
-        if entry_date > goal.target_date:
-            break
-
         slot = sorted_slots[slot_in_day]
 
-        entry = StudyCalendarEntry(
+        entries.append(StudyCalendarEntry(
             goal_id=goal.id,
             plan_date=entry_date,
             slot_label=slot.label,
@@ -314,8 +329,7 @@ def generate_calendar(
             duration_mins=unit["adjusted_mins"],
             content_ids=unit["content_ids"],
             status="pending",
-        )
-        entries.append(entry)
+        ))
 
     return entries
 

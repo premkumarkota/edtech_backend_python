@@ -124,45 +124,48 @@ def list_exams(
         .order_by(category_match_rank, GoalExam.display_order, GoalExam.name)
         .all()
     )
+    # The student can pick from ALL active subjects in the browsed category —
+    # not just the ones an admin mapped. The admin mapping is only used to flag
+    # which subjects are "required" / their weightage.
+    category_syllabi = []
+    if effective_category_id is not None:
+        category_syllabi = (
+            db.query(Syllabus)
+            .filter(
+                Syllabus.category_id == effective_category_id,
+                Syllabus.is_active == True,
+            )
+            .order_by(Syllabus.title)
+            .all()
+        )
+
     results = []
     for exam in exams:
-        subjects = []
-        for es in exam.subjects:
-            syl = es.syllabus
-            if not syl:
-                continue
-            # Prefer subjects that belong to the board being browsed
-            if (
-                effective_category_id is not None
-                and syl.category_id is not None
-                and syl.category_id != effective_category_id
-            ):
-                continue
-            subjects.append(ExamSubjectResponse(
-                syllabus_id=syl.id,
-                title=syl.title,
-                is_required=es.is_required,
-                weightage=es.weightage,
-            ))
+        required_ids = {es.syllabus_id for es in exam.subjects if es.is_required}
+        weight_by_id = {es.syllabus_id: es.weightage for es in exam.subjects}
 
-        # If admin mapped subjects from another board (or none), fall back to
-        # this category's syllabus so students can still pick subjects.
-        if not subjects and effective_category_id is not None:
-            for syl in (
-                db.query(Syllabus)
-                .filter(
-                    Syllabus.category_id == effective_category_id,
-                    Syllabus.is_active == True,
-                )
-                .order_by(Syllabus.title)
-                .all()
-            ):
-                subjects.append(ExamSubjectResponse(
+        if category_syllabi:
+            subjects = [
+                ExamSubjectResponse(
                     syllabus_id=syl.id,
                     title=syl.title,
-                    is_required=False,
-                    weightage=1.0,
-                ))
+                    is_required=syl.id in required_ids,
+                    weightage=weight_by_id.get(syl.id, 1.0),
+                )
+                for syl in category_syllabi
+            ]
+        else:
+            # No category context — fall back to whatever the admin mapped.
+            subjects = [
+                ExamSubjectResponse(
+                    syllabus_id=es.syllabus.id,
+                    title=es.syllabus.title,
+                    is_required=es.is_required,
+                    weightage=es.weightage,
+                )
+                for es in exam.subjects
+                if es.syllabus is not None
+            ]
 
         results.append(ExamResponse(
             id=exam.id, name=exam.name, code=exam.code,
@@ -215,19 +218,8 @@ def setup_goal(
     if not payload.subject_ids:
         raise HTTPException(400, "Select at least one subject")
 
-    # Validate subjects exist and belong to exam / effective category
-    exam_subject_ids = set()
-    if exam is not None:
-        exam_subject_ids = {
-            es.syllabus_id
-            for es in exam.subjects
-            if es.syllabus is not None
-            and (
-                effective_category_id is None
-                or es.syllabus.category_id == effective_category_id
-            )
-        }
-
+    # Validate subjects exist and belong to the effective category. The student
+    # may pick ANY subject in the category (admin mapping no longer restricts).
     for sid in payload.subject_ids:
         syl = db.query(Syllabus).filter(Syllabus.id == sid).first()
         if not syl:
@@ -236,14 +228,6 @@ def setup_goal(
             raise HTTPException(
                 400,
                 f"Subject '{syl.title}' is not in the selected learning category",
-            )
-        # If exam has in-category mapped subjects, require membership.
-        # If mappings are empty/wrong-board (fallback syllabus list), allow any
-        # subject from the effective category.
-        if exam is not None and exam_subject_ids and sid not in exam_subject_ids:
-            raise HTTPException(
-                400,
-                f"Subject '{syl.title}' is not mapped to exam '{exam.name}'",
             )
 
     # Validate time slots don't overlap
@@ -448,11 +432,16 @@ def update_goal(
     if not goal:
         raise HTTPException(404, "Goal not found")
 
+    regen = False
     if payload.target_date is not None:
         if payload.target_date <= date.today():
             raise HTTPException(400, "Target date must be in the future")
+        if payload.target_date != goal.target_date:
+            regen = True
         goal.target_date = payload.target_date
     if payload.daily_study_hours is not None:
+        if payload.daily_study_hours != goal.daily_study_hours:
+            regen = True
         goal.daily_study_hours = payload.daily_study_hours
     if payload.planning_mode is not None:
         goal.planning_mode = payload.planning_mode
@@ -462,9 +451,26 @@ def update_goal(
         goal.pass_threshold = payload.pass_threshold
 
     goal.updated_at = datetime.now(timezone.utc)
+    db.flush()
+
+    # A changed target date / daily hours must reshape the plan to span the new
+    # window — otherwise the calendar keeps the old distribution.
+    plan_message = None
+    if regen and goal.status == "active":
+        try:
+            result = generate_plan_for_goal(goal, db)
+            plan_message = result.get("message")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Auto-regenerate after goal update failed: {e}")
+
     db.commit()
 
-    return {"message": "Goal updated", "goal_id": goal.id}
+    return {
+        "message": "Goal updated",
+        "goal_id": goal.id,
+        "regenerated": regen,
+        "plan_message": plan_message,
+    }
 
 
 @router.delete("/goals/{goal_id}")
