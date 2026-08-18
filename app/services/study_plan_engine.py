@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models.user import User
 from app.models.syllabus import Syllabus, Chapter, SyllabusContent
+from app.models.quiz import Quiz, QuizStatus
 from app.models.study_planner_v2 import (
     StudyGoal, StudyGoalSubject, StudyTimeSlot,
     StudyCalendarEntry, GoalExam,
@@ -156,7 +157,25 @@ def collect_study_units(
             )
             content_ids = [c.id for c in contents]
 
-            if require_content and not content_ids:
+            # A chapter is "studyable" if it has uploaded lessons OR published AI
+            # content OR a published chapter quiz.
+            has_ai_content = bool(
+                getattr(ch, "content_published", False)
+                and (ch.description or "").strip()
+            )
+            has_quiz = (
+                db.query(Quiz.id)
+                .filter(
+                    Quiz.chapter_id == ch.id,
+                    Quiz.quiz_type == "chapter",
+                    Quiz.status == QuizStatus.PUBLISHED,
+                )
+                .first()
+                is not None
+            )
+            has_materials = bool(content_ids) or has_ai_content or has_quiz
+
+            if require_content and not has_materials:
                 skipped_empty += 1
                 continue
 
@@ -170,7 +189,7 @@ def collect_study_units(
                 "estimated_mins": estimated,
                 "adjusted_mins": adjusted_mins,
                 "content_ids": content_ids,
-                "has_materials": bool(content_ids),
+                "has_materials": has_materials,
             })
 
     if require_content and skipped_empty and not study_units:
@@ -344,26 +363,16 @@ def generate_plan_for_goal(goal: StudyGoal, db: Session) -> dict:
     if not subject_ids:
         return {"status": "error", "total_units": 0, "message": "No subjects selected"}
 
-    # Prefer chapters that already have materials; fall back to all chapters
-    # so empty syllabi still surface a clear generate error instead of silent empty calendar.
-    study_units = collect_study_units(subject_ids, db, require_content=True)
+    # Schedule EVERY chapter of the selected subjects — even name-only chapters
+    # (they become "study this chapter" sessions that deep-link to the content).
+    study_units = collect_study_units(subject_ids, db, require_content=False)
     skipped_note = ""
     if not study_units:
-        all_units = collect_study_units(subject_ids, db, require_content=False)
-        if all_units:
-            return {
-                "status": "error",
-                "total_units": 0,
-                "message": (
-                    "No study materials found on any chapter. "
-                    "Upload lessons in Admin → Syllabus before generating a plan."
-                ),
-            }
-        return {"status": "error", "total_units": 0, "message": "No chapters found for selected subjects"}
-    else:
-        all_count = len(collect_study_units(subject_ids, db, require_content=False))
-        if all_count > len(study_units):
-            skipped_note = f" Skipped {all_count - len(study_units)} chapter(s) with no materials."
+        return {
+            "status": "error",
+            "total_units": 0,
+            "message": "No chapters found for the selected subjects. Add chapters under Admin → Syllabus.",
+        }
 
     time_slots = goal.time_slots
     if not time_slots:

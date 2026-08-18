@@ -617,6 +617,8 @@ def get_today_plan(
             topic_title=entry.topic_title,
             subject_name=entry.subject_name,
             chapter_name=entry.chapter_name,
+            syllabus_id=entry.syllabus_id,
+            chapter_id=entry.chapter_id,
             difficulty=entry.difficulty or "medium",
             duration_mins=entry.duration_mins,
             status=entry.status,

@@ -193,6 +193,8 @@ class TodaySessionResponse(BaseModel):
     topic_title: str
     subject_name: Optional[str] = None
     chapter_name: Optional[str] = None
+    syllabus_id: Optional[int] = None
+    chapter_id: Optional[int] = None
     difficulty: str = "medium"
     duration_mins: int
     status: str = "pending"
