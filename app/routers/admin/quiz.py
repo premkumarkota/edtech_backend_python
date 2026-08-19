@@ -220,12 +220,72 @@ async def add_manual_question(
         order_index=next_idx
     )
     db.add(question)
-    
+
     # Update quiz total marks
     quiz.total_marks += question.marks
     db.commit()
-    
+
     return {"status": "success", "question_id": question.id}
+
+
+@router.patch("/questions/{question_id}")
+def update_question(
+    question_id: int,
+    payload: dict,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Edit a single question. Recomputes the quiz total marks."""
+    q = db.query(QuizQuestion).filter(QuizQuestion.id == question_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    for field in ("question_text", "option_a", "option_b", "option_c",
+                  "option_d", "explanation"):
+        if field in payload:
+            setattr(q, field, payload[field])
+    if payload.get("correct_option"):
+        c = str(payload["correct_option"]).strip().upper()
+        if c not in ("A", "B", "C", "D"):
+            raise HTTPException(status_code=422, detail="correct_option must be A, B, C or D")
+        q.correct_option = c
+    if "marks" in payload:
+        try:
+            q.marks = max(1, int(payload["marks"]))
+        except (ValueError, TypeError):
+            pass
+
+    db.commit()
+
+    quiz = db.query(Quiz).filter(Quiz.id == q.quiz_id).first()
+    if quiz:
+        quiz.total_marks = sum(qq.marks for qq in quiz.questions)
+        db.commit()
+    return {"status": "success", "question_id": question_id}
+
+
+@router.delete("/questions/{question_id}")
+def delete_question(
+    question_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Delete a single question. Recomputes the quiz total marks."""
+    q = db.query(QuizQuestion).filter(QuizQuestion.id == question_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    quiz_id = q.quiz_id
+    # Remove any answers referencing this question, then the question.
+    db.query(QuizAnswer).filter(QuizAnswer.question_id == question_id).delete(
+        synchronize_session=False)
+    db.delete(q)
+    db.commit()
+
+    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
+    if quiz:
+        quiz.total_marks = sum(qq.marks for qq in quiz.questions)
+        db.commit()
+    return {"status": "success"}
 
 
 @router.get("", response_model=List[QuizResponse])
