@@ -1,13 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
-from typing import List, Optional
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from typing import List, Optional, Callable
+import logging
 
 from app.database import get_db
 from app.dependencies import require_admin
 from app.models.user import User
 from app.models.syllabus import Syllabus, Chapter, SyllabusContent
 from app.models.category import Category
+from app.models.quiz import Quiz, QuizQuestion, QuizStatus, MockTestChapter, ChapterProgress
+from app.models.study_planner_v2 import (
+    GoalExamSubject,
+    StudyGoalSubject,
+    StudyCalendarEntry,
+    StudyMcqBank,
+    StudyMcqAttempt,
+)
 from app.schemas.syllabus import (
     SyllabusSummary,
     SyllabusCreate,
@@ -24,7 +34,6 @@ from app.schemas.syllabus_admin_requests import (
     AIChapterContentRequest,
 )
 from app.services.ai_content_service import generate_content, refine_content, AIContentError
-from app.models.quiz import Quiz, QuizQuestion, QuizStatus
 from app.schemas.quiz import ChapterQuizGenerate, QuizResponse, QuizQuestionWithAnswer
 from app.services.ai_quiz_service import generate_from_content, AIQuizError
 from app.services.syllabus_layout import syllabus_to_detail_with_layout, chapter_to_layout_response
@@ -37,7 +46,104 @@ from app.services.storage_service import (
     SYLLABUS_CONTENT_MAX_VIDEO_MB,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+def _run_optional_detach(db: Session, label: str, fn: Callable[[], None]) -> None:
+    """Run a cleanup that may fail if a later table is missing on older DBs."""
+    try:
+        with db.begin_nested():
+            fn()
+    except ProgrammingError:
+        logger.warning("Optional detach skipped (%s) — table may not exist", label, exc_info=True)
+
+
+def _detach_chapter_dependents(db: Session, chapter_ids: list[int]) -> None:
+    """Clear / delete rows that block chapter (and thus syllabus) deletion."""
+    if not chapter_ids:
+        return
+
+    db.query(Quiz).filter(Quiz.chapter_id.in_(chapter_ids)).update(
+        {Quiz.chapter_id: None},
+        synchronize_session=False,
+    )
+
+    def _progress() -> None:
+        db.query(ChapterProgress).filter(
+            ChapterProgress.chapter_id.in_(chapter_ids)
+        ).delete(synchronize_session=False)
+
+    def _mock_links() -> None:
+        db.query(MockTestChapter).filter(
+            MockTestChapter.chapter_id.in_(chapter_ids)
+        ).delete(synchronize_session=False)
+
+    def _calendar() -> None:
+        db.query(StudyCalendarEntry).filter(
+            StudyCalendarEntry.chapter_id.in_(chapter_ids)
+        ).update(
+            {StudyCalendarEntry.chapter_id: None},
+            synchronize_session=False,
+        )
+
+    def _mcq_banks() -> None:
+        bank_ids = [
+            row.id
+            for row in db.query(StudyMcqBank.id)
+            .filter(StudyMcqBank.chapter_id.in_(chapter_ids))
+            .all()
+        ]
+        if not bank_ids:
+            return
+        db.query(StudyMcqAttempt).filter(
+            StudyMcqAttempt.mcq_bank_id.in_(bank_ids)
+        ).delete(synchronize_session=False)
+        db.query(StudyMcqBank).filter(StudyMcqBank.id.in_(bank_ids)).delete(
+            synchronize_session=False
+        )
+
+    _run_optional_detach(db, "chapter_progress", _progress)
+    _run_optional_detach(db, "mock_test_chapters", _mock_links)
+    _run_optional_detach(db, "study_calendar_entries", _calendar)
+    _run_optional_detach(db, "study_mcq_banks", _mcq_banks)
+
+    db.query(SyllabusContent).filter(
+        SyllabusContent.chapter_id.in_(chapter_ids)
+    ).delete(synchronize_session=False)
+
+
+def _detach_syllabus_dependents(db: Session, syllabus_id: int) -> list[int]:
+    """Unlink quizzes / study-planner rows, return chapter ids for this syllabus."""
+    chapter_ids = [
+        row.id
+        for row in db.query(Chapter.id).filter(Chapter.syllabus_id == syllabus_id).all()
+    ]
+
+    db.query(Quiz).filter(Quiz.syllabus_id == syllabus_id).update(
+        {Quiz.syllabus_id: None, Quiz.chapter_id: None},
+        synchronize_session=False,
+    )
+    db.query(GoalExamSubject).filter(
+        GoalExamSubject.syllabus_id == syllabus_id
+    ).delete(synchronize_session=False)
+    db.query(StudyGoalSubject).filter(
+        StudyGoalSubject.syllabus_id == syllabus_id
+    ).delete(synchronize_session=False)
+    db.query(StudyCalendarEntry).filter(
+        StudyCalendarEntry.syllabus_id == syllabus_id
+    ).update(
+        {StudyCalendarEntry.syllabus_id: None},
+        synchronize_session=False,
+    )
+
+    _detach_chapter_dependents(db, chapter_ids)
+    if chapter_ids:
+        db.query(Chapter).filter(Chapter.id.in_(chapter_ids)).delete(
+            synchronize_session=False
+        )
+    return chapter_ids
 
 # --- Syllabus (Subject/Course) ---
 @router.post("", response_model=SyllabusSummary)
@@ -141,9 +247,25 @@ async def update_syllabus(
 @router.delete("/{syllabus_id}")
 def delete_syllabus(syllabus_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     s = db.query(Syllabus).filter(Syllabus.id == syllabus_id).first()
-    if not s: raise HTTPException(404)
-    db.delete(s)
-    db.commit()
+    if not s:
+        raise HTTPException(status_code=404, detail="Syllabus not found")
+    try:
+        _detach_syllabus_dependents(db, syllabus_id)
+        db.query(Syllabus).filter(Syllabus.id == syllabus_id).delete(
+            synchronize_session=False
+        )
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.exception("Failed to delete syllabus %s", syllabus_id)
+        orig = getattr(e, "orig", e)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot delete this subject because other records still reference it. "
+                f"{orig}"
+            ),
+        ) from e
     return {"message": "Deleted"}
 
 # --- Chapters ---
@@ -168,9 +290,25 @@ def create_chapter(
 @router.delete("/chapters/{chapter_id}")
 def delete_chapter(chapter_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
-    if not c: raise HTTPException(404)
-    db.delete(c)
-    db.commit()
+    if not c:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    try:
+        _detach_chapter_dependents(db, [chapter_id])
+        db.query(Chapter).filter(Chapter.id == chapter_id).delete(
+            synchronize_session=False
+        )
+        db.commit()
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.exception("Failed to delete chapter %s", chapter_id)
+        orig = getattr(e, "orig", e)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot delete this chapter because other records still reference it. "
+                f"{orig}"
+            ),
+        ) from e
     return {"message": "Deleted"}
 
 
