@@ -187,6 +187,94 @@ def generate_from_content(
     return _run_generation(prompt, marks_per_question, f"{chapter or 'Chapter'} Quiz")
 
 
+# ── Refine (edit an existing question set with an admin instruction) ───────────
+
+def _format_existing_questions(questions: list[dict]) -> str:
+    """Render the current questions into a readable block for the refine prompt."""
+    blocks = []
+    for i, q in enumerate(questions, start=1):
+        expl = (q.get("explanation") or "").strip()
+        blocks.append(
+            f"Q{i}. {(q.get('question_text') or '').strip()}\n"
+            f"   A) {(q.get('option_a') or '').strip()}\n"
+            f"   B) {(q.get('option_b') or '').strip()}\n"
+            f"   C) {(q.get('option_c') or '').strip()}\n"
+            f"   D) {(q.get('option_d') or '').strip()}\n"
+            f"   Correct: {(q.get('correct_option') or '').strip().upper()}"
+            + (f"\n   Explanation: {expl}" if expl else "")
+        )
+    return "\n\n".join(blocks)
+
+
+def _build_refine_prompt(
+    existing_block: str,
+    instruction: str,
+    difficulty: str,
+    subject: str,
+    topic: str,
+    is_mock: bool,
+) -> str:
+    kind = "mock test" if is_mock else "quiz"
+    diff = _difficulty_phrase(difficulty)
+    ctx = []
+    if subject:
+        ctx.append(f"Subject: {subject}")
+    if topic:
+        ctx.append(f"Chapter / topic / scope: {topic}")
+    head = "\n".join(ctx)
+    head = f"{head}\n\n" if head else ""
+    return (
+        f"You are revising an existing {kind}. Below are its current questions.\n\n"
+        f"{head}"
+        f"--- CURRENT QUESTIONS START ---\n{existing_block}\n--- CURRENT QUESTIONS END ---\n\n"
+        f'Revise the {kind} according to this instruction:\n"{instruction}"\n\n'
+        "Rules:\n"
+        "- Apply ONLY what the instruction asks. Leave every other question unchanged "
+        "(same wording, options, correct answer, and explanation).\n"
+        "- Keep the original order of the questions you retain, unless the instruction says otherwise.\n"
+        "- Each question must have exactly 4 options (A-D) with exactly one correct answer.\n"
+        "- 'correct_option' must be A, B, C, or D and must be the genuinely correct answer.\n"
+        "- Do not use 'All of the above' / 'None of the above'.\n"
+        "- 'explanation' is 1-2 sentences on why the correct option is right.\n"
+        f"- Where the instruction implies difficulty, target {diff}.\n"
+        "- Return the COMPLETE updated set of questions that should remain after your edit "
+        "(not just the ones you changed).\n"
+        f"- 'title' is a short {kind} title."
+    )
+
+
+def refine_questions(
+    existing_questions: list[dict],
+    instruction: str,
+    marks_per_question: int = 1,
+    difficulty: str = "mixed",
+    subject: str = "",
+    topic: str = "",
+    fallback_title: str = "Quiz",
+    is_mock: bool = False,
+) -> dict:
+    """Revise an existing question set according to an admin instruction.
+
+    The model receives the current questions and edits them in place — so
+    instructions like "make Q3 harder", "remove the geography ones", or
+    "add 5 numerical questions" work as expected. Returns {title, questions[]}.
+    """
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise AIQuizError("Type what you want the AI to change.")
+    if not existing_questions:
+        raise AIQuizError("There are no questions to refine. Generate first.")
+    prompt = _build_refine_prompt(
+        _format_existing_questions(existing_questions),
+        instruction,
+        difficulty,
+        (subject or "").strip(),
+        (topic or "").strip(),
+        is_mock,
+    )
+    return _run_generation(prompt, marks_per_question, fallback_title)
+
+
 def generate_mock_test(
     scope_label: str,
     chapter_outlines: list[dict],

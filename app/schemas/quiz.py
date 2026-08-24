@@ -28,6 +28,18 @@ class AIQuizGenerate(BaseModel):
     marks_per_question: int = 1
 
 
+class AIQuizRefine(BaseModel):
+    """Refine an existing AI-generated quiz / mock test with a free-form instruction.
+
+    The AI receives the quiz's current questions and edits them in place
+    (e.g. "make them harder", "remove question 3", "add 5 numerical questions").
+    Difficulty is an optional hint; marks_per_question keeps the mark weight.
+    """
+    instruction: str
+    difficulty: Optional[str] = None
+    marks_per_question: int = 1
+
+
 class QuizResponse(BaseModel):
     id: int
     category_id: int

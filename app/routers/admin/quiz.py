@@ -19,9 +19,11 @@ from app.dependencies import require_admin
 from app.models.user import User
 from app.models.quiz import Quiz, QuizQuestion, QuizStatus, QuizAttempt, QuizAnswer
 from app.models.category import Category
-from app.schemas.quiz import QuizCreate, QuizResponse, QuizQuestionWithAnswer, AIQuizGenerate
+from app.schemas.quiz import (
+    QuizCreate, QuizResponse, QuizQuestionWithAnswer, AIQuizGenerate, AIQuizRefine,
+)
 from app.services.excel_parser import parse_quiz_excel
-from app.services.ai_quiz_service import generate_quiz, AIQuizError
+from app.services.ai_quiz_service import generate_quiz, refine_questions, AIQuizError
 
 router = APIRouter()
 
@@ -102,6 +104,92 @@ def ai_generate_quiz(
 
     response = QuizResponse.from_orm(quiz)
     response.question_count = len(questions)
+    return response
+
+
+@router.post("/{quiz_id}/ai-refine", response_model=QuizResponse)
+def ai_refine_quiz(
+    quiz_id: int,
+    payload: AIQuizRefine,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Refine an existing AI-generated quiz / mock test with a free-form instruction.
+
+    The AI is given the quiz's current questions plus the instruction and returns a
+    revised set (e.g. "make them harder", "remove question 3", "add 5 numericals").
+    The questions are replaced IN PLACE on the same quiz and it is reset to DRAFT so
+    the admin re-reviews before publishing. Works for both plain quizzes and mock
+    tests (a mock test is a Quiz row with quiz_type='mock').
+    """
+    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+
+    instruction = (payload.instruction or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=422, detail="Type what you want the AI to change")
+
+    if not quiz.questions:
+        raise HTTPException(
+            status_code=400, detail="This quiz has no questions to refine yet"
+        )
+    # Refusing to rewrite a quiz students have already attempted keeps their
+    # results consistent with the questions they actually answered.
+    if quiz.attempts:
+        raise HTTPException(
+            status_code=409,
+            detail="This quiz already has student attempts and can't be regenerated. "
+                   "Duplicate it or create a new one instead.",
+        )
+
+    existing = [
+        {
+            "question_text": q.question_text,
+            "option_a": q.option_a,
+            "option_b": q.option_b,
+            "option_c": q.option_c,
+            "option_d": q.option_d,
+            "correct_option": q.correct_option,
+            "explanation": q.explanation,
+        }
+        for q in sorted(quiz.questions, key=lambda q: (q.order_index, q.id))
+    ]
+
+    is_mock = (quiz.quiz_type or "") == "mock"
+    subject = quiz.syllabus.title if quiz.syllabus else ""
+
+    try:
+        result = refine_questions(
+            existing_questions=existing,
+            instruction=instruction,
+            marks_per_question=payload.marks_per_question,
+            difficulty=(payload.difficulty or "mixed").strip(),
+            subject=subject,
+            topic=quiz.title or "",
+            fallback_title=quiz.title or ("Mock Test" if is_mock else "Quiz"),
+            is_mock=is_mock,
+        )
+    except AIQuizError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    questions_data = result["questions"]
+    if not questions_data:
+        raise HTTPException(status_code=502, detail="AI returned no questions. Try again.")
+
+    # Replace questions in place (cascade delete-orphan removes the old rows).
+    quiz.questions.clear()
+    db.flush()
+    db.add_all([QuizQuestion(quiz_id=quiz.id, **q) for q in questions_data])
+    quiz.total_marks = sum(q["marks"] for q in questions_data)
+    # Editing content sends the quiz back to DRAFT so it is re-reviewed before publish.
+    quiz.status = QuizStatus.DRAFT
+    db.commit()
+    db.refresh(quiz)
+
+    response = QuizResponse.from_orm(quiz)
+    response.question_count = len(questions_data)
     return response
 
 
