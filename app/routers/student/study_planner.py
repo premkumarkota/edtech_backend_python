@@ -26,7 +26,7 @@ from app.schemas.study_planner_v2 import (
     GoalUpdateRequest, FeasibilityInfo, GenerateStatusResponse,
     CalendarResponse, CalendarEntryResponse, CalendarSummary,
     TodayPlanResponse, TodaySessionResponse, ContentInfo,
-    SessionStartResponse,
+    SessionStartResponse, SessionSkipResponse,
     McqGenerateRequest, McqGenerateResponse, McqQuestionResponse,
     McqSubmitRequest, McqSubmitResponse, McqResultDetail,
     ProgressResponse, OverallProgress, WeeklyDataPoint, SubjectBreakdown,
@@ -39,7 +39,9 @@ from app.services.study_plan_engine import (
 )
 from app.services.study_mcq_service import get_or_generate_mcq, score_mcq_attempt
 from app.services.study_rate_limit import check_rate_limit
-from app.services.study_reschedule_service import update_streak, check_and_award_badges
+from app.services.study_reschedule_service import (
+    update_streak, check_and_award_badges, reschedule_entry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -617,6 +619,9 @@ def get_today_plan(
             topic_title=entry.topic_title,
             subject_name=entry.subject_name,
             chapter_name=entry.chapter_name,
+            subtopic_title=entry.subtopic_title,
+            subtopic_index=entry.subtopic_index,
+            subtopic_total=entry.subtopic_total,
             syllabus_id=entry.syllabus_id,
             chapter_id=entry.chapter_id,
             difficulty=entry.difficulty or "medium",
@@ -681,10 +686,11 @@ def start_session(
     contents = _resolve_entry_contents(entry, db)
     db.commit()
 
-    msg = f"Let's study {entry.topic_title}!"
+    focus = entry.subtopic_title or entry.topic_title
+    msg = f"Let's study {focus}!"
     if not contents:
         msg = (
-            f"No uploaded materials for {entry.topic_title} yet. "
+            f"No uploaded materials for {focus} yet. "
             "Self-study this topic, then take the MCQ or mark complete."
         )
 
@@ -695,6 +701,12 @@ def start_session(
         contents=contents,
         has_materials=bool(contents),
         message=msg,
+        topic_title=entry.topic_title,
+        subject_name=entry.subject_name,
+        chapter_name=entry.chapter_name,
+        subtopic_title=entry.subtopic_title,
+        subtopic_index=entry.subtopic_index,
+        subtopic_total=entry.subtopic_total,
     )
 
 
@@ -747,13 +759,17 @@ def complete_session(
     }
 
 
-@router.post("/sessions/{entry_id}/skip")
+@router.post("/sessions/{entry_id}/skip", response_model=SessionSkipResponse)
 def skip_session(
     entry_id: int,
     student: User = Depends(get_onboarded_student),
     db: Session = Depends(get_db),
 ):
-    """Skip a study session."""
+    """Skip a study session — and re-queue it later in the plan.
+
+    A skipped subtopic isn't lost: it's appended after the last pending day
+    (deadline-safe, capped per chapter) so the student still covers it.
+    """
     entry = (
         db.query(StudyCalendarEntry)
         .join(StudyGoal, StudyGoal.id == StudyCalendarEntry.goal_id)
@@ -769,9 +785,19 @@ def skip_session(
     if entry.status not in ("pending", "in_progress"):
         raise HTTPException(400, f"Session is already {entry.status}")
 
-    entry.status = "skipped"
+    new_entry = reschedule_entry(entry, db, mark_skipped=True)
     db.commit()
-    return {"message": "Session skipped"}
+
+    if new_entry:
+        return SessionSkipResponse(
+            message="Session skipped — moved to a later day so you don't miss it.",
+            rescheduled=True,
+            rescheduled_date=new_entry.plan_date,
+        )
+    return SessionSkipResponse(
+        message="Session skipped. It couldn't be rescheduled before your target date.",
+        rescheduled=False,
+    )
 
 
 # ═══════════════════════════════════════════════════════════

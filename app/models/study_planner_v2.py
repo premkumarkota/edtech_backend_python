@@ -155,6 +155,11 @@ class StudyCalendarEntry(Base):
     topic_title = Column(String(200), nullable=False)
     subject_name = Column(String(100), nullable=True)
     chapter_name = Column(String(200), nullable=True)
+    # Subtopic scoping: when a chapter is split across multiple sessions, each
+    # session covers a distinct AI-segmented subtopic (own content + own quiz).
+    subtopic_title = Column(String(200), nullable=True)
+    subtopic_index = Column(Integer, nullable=True)   # 1-based position within the chapter
+    subtopic_total = Column(Integer, nullable=True)   # total subtopics for this chapter in the plan
     difficulty = Column(String(10), default="medium")
     duration_mins = Column(Integer, nullable=False)
     content_ids = Column(JSON, default=list)
@@ -186,6 +191,27 @@ class StudyMcqBank(Base):
     chapter_id = Column(Integer, ForeignKey("chapters.id"), nullable=True)
     topic_title = Column(String(200), nullable=False)
     questions = Column(JSON, nullable=False)
+    generated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class StudyChapterSubtopic(Base):
+    """Cached AI-generated subtopic breakdown for a chapter.
+
+    A chapter is segmented into N ordered subtopics so the planner can give each
+    study session its own distinct subtopic (heading, content slice, and quiz).
+    Cached per (chapter_id, session_count) because the number of subtopics equals
+    how many sessions that chapter is allotted, which varies between plans.
+    """
+    __tablename__ = "study_chapter_subtopics"
+    __table_args__ = (
+        UniqueConstraint("chapter_id", "session_count", name="uq_subtopic_chapter_count"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    chapter_id = Column(Integer, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
+    session_count = Column(Integer, nullable=False)
+    # [{"title": str, "summary": str, "content_ids": [int, ...]}], ordered.
+    subtopics = Column(JSON, nullable=False)
     generated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 

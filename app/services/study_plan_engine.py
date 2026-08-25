@@ -156,6 +156,7 @@ def collect_study_units(
                 .all()
             )
             content_ids = [c.id for c in contents]
+            content_items = [{"id": c.id, "title": c.title} for c in contents]
 
             # A chapter is "studyable" if it has uploaded lessons OR published AI
             # content OR a published chapter quiz.
@@ -189,6 +190,8 @@ def collect_study_units(
                 "estimated_mins": estimated,
                 "adjusted_mins": adjusted_mins,
                 "content_ids": content_ids,
+                "content_items": content_items,
+                "description": ch.description or "",
                 "has_materials": has_materials,
             })
 
@@ -226,47 +229,64 @@ def _round_robin_interleave(units: list[dict]) -> list[dict]:
     return result
 
 
+# Cap on how many sessions (subtopics) one chapter is split into.
+_MAX_SESSIONS_PER_CHAPTER = 6
+# Slight time taper across a chapter's sessions (first session gets full time).
+_DURATION_FACTORS = [1.0, 0.9, 0.9, 0.8, 0.7, 0.6]
+
+
 def _expand_units_to_sessions(
     study_units: list[dict],
     total_available_slots: int,
+    db: Session,
 ) -> list[dict]:
     """
-    Expand each study unit into multiple sessions (Learn → Practice → Revise)
-    to fill the available schedule meaningfully.
+    Expand each chapter into multiple sessions to fill the schedule meaningfully.
 
-    With 2 chapters and 37 slots, this creates ~6 sessions per chapter
-    (study, deep-dive, practice problems, revise, mock test, final review).
+    Each extra session covers a DISTINCT AI-segmented subtopic of the chapter, so
+    the content shown and the MCQ quiz differ across a chapter's sessions instead
+    of repeating the whole chapter. Subtopics are cached per (chapter, count).
     """
+    from app.services.study_subtopic_service import get_subtopics
+
     num_units = len(study_units)
     if num_units == 0:
         return []
 
-    # How many sessions can we create per unit?
+    # How many sessions (subtopics) can we create per chapter?
     sessions_per_unit = max(1, total_available_slots // num_units)
-    # Cap at 6 session types per chapter to keep it meaningful
-    sessions_per_unit = min(sessions_per_unit, 6)
+    sessions_per_unit = min(sessions_per_unit, _MAX_SESSIONS_PER_CHAPTER)
 
-    # Define session phases per chapter
-    _PHASES = [
-        (_SESSION_LEARN, "📖 Learn — Read & understand the concepts", 1.0),
-        ("Deep Dive", "🔍 Deep Dive — Detailed study of formulas & theory", 0.8),
-        (_SESSION_PRACTICE, "✏️ Practice — Solve problems & exercises", 0.9),
-        (_SESSION_REVISE, "🔄 Revise — Review key points & notes", 0.6),
-        ("Mock Test", "📝 Mock Test — MCQ self-assessment", 0.5),
-        ("Final Review", "📋 Final Review — Quick recap before moving on", 0.4),
-    ]
+    if sessions_per_unit <= 1:
+        # No room to expand — one session per chapter, studied whole.
+        return list(study_units)
 
     expanded = []
     for unit in study_units:
-        for phase_idx in range(sessions_per_unit):
-            phase_name, phase_desc, duration_factor = _PHASES[phase_idx]
+        subtopics = get_subtopics(
+            chapter_id=unit["chapter_id"],
+            chapter_title=unit["topic_title"],   # unit topic_title == chapter title here
+            description=unit.get("description", ""),
+            content_items=unit.get("content_items", []),
+            n=sessions_per_unit,
+            db=db,
+            subject_name=unit.get("subject_name", ""),
+        )
+        total = len(subtopics)
+        for i, st in enumerate(subtopics):
+            factor = _DURATION_FACTORS[min(i, len(_DURATION_FACTORS) - 1)]
+            # Prefer the subtopic's own content slice; fall back to the whole
+            # chapter's materials so a session is never left with nothing.
+            content_ids = st.get("content_ids") or unit["content_ids"]
             session = {
                 **unit,
-                "topic_title": f"{phase_name}: {unit['topic_title']}",
+                "topic_title": st["title"],
+                "subtopic_title": st["title"],
+                "subtopic_index": i + 1,
+                "subtopic_total": total,
                 "original_topic": unit["topic_title"],
-                "session_phase": phase_name,
-                "phase_order": phase_idx,
-                "adjusted_mins": max(20, int(unit["adjusted_mins"] * duration_factor)),
+                "content_ids": content_ids,
+                "adjusted_mins": max(20, int(unit["adjusted_mins"] * factor)),
             }
             expanded.append(session)
 
@@ -300,7 +320,7 @@ def generate_calendar(
     # Expand units into Learn/Practice/Revise sessions when there's room, so the
     # plan meaningfully fills the window up to the target date.
     if len(study_units) < capacity:
-        expanded = _expand_units_to_sessions(study_units, capacity)
+        expanded = _expand_units_to_sessions(study_units, capacity, db)
     else:
         expanded = study_units
 
@@ -344,6 +364,9 @@ def generate_calendar(
             topic_title=unit["topic_title"],
             subject_name=unit["subject_name"],
             chapter_name=unit["chapter_name"],
+            subtopic_title=unit.get("subtopic_title"),
+            subtopic_index=unit.get("subtopic_index"),
+            subtopic_total=unit.get("subtopic_total"),
             difficulty=unit["difficulty"],
             duration_mins=unit["adjusted_mins"],
             content_ids=unit["content_ids"],

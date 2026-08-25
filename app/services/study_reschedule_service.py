@@ -30,6 +30,106 @@ _STREAK_BADGES = {
 _MAX_RESCHEDULE_PER_TOPIC = 2
 
 
+def reschedule_entry(entry, db, *, mark_skipped: bool = True):
+    """
+    Re-queue a single skipped/missed session after the plan's last pending day.
+
+    Appends a fresh copy of the session (same chapter/subtopic/content) into the
+    next free slot, respecting the per-chapter reschedule cap and never scheduling
+    past the goal's target date. Optionally marks the original as ``skipped``.
+
+    Returns the new StudyCalendarEntry, or None if it was capped or past the
+    deadline. The caller is responsible for committing.
+    """
+    if mark_skipped:
+        entry.status = "skipped"
+
+    # Stop rescheduling the same chapter after a few attempts.
+    reschedule_count = (
+        db.query(StudyCalendarEntry)
+        .filter(
+            StudyCalendarEntry.goal_id == entry.goal_id,
+            StudyCalendarEntry.chapter_id == entry.chapter_id,
+            StudyCalendarEntry.is_revision == False,  # noqa: E712
+            StudyCalendarEntry.original_date.isnot(None),
+        )
+        .count()
+    )
+    if reschedule_count >= _MAX_RESCHEDULE_PER_TOPIC:
+        return None
+
+    goal = db.query(StudyGoal).filter(StudyGoal.id == entry.goal_id).first()
+    if not goal:
+        return None
+
+    time_slots = goal.time_slots
+    if not time_slots:
+        return None
+    slots_per_day = len(time_slots)
+
+    today_ist = (datetime.now(timezone.utc) + _IST_OFFSET).date()
+
+    # Find the latest pending day and pack into its next free slot (rolling forward).
+    last_entry = (
+        db.query(StudyCalendarEntry)
+        .filter(
+            StudyCalendarEntry.goal_id == goal.id,
+            StudyCalendarEntry.status == "pending",
+        )
+        .order_by(StudyCalendarEntry.plan_date.desc(), StudyCalendarEntry.slot_order.desc())
+        .first()
+    )
+
+    if last_entry:
+        entries_on_last_day = (
+            db.query(StudyCalendarEntry)
+            .filter(
+                StudyCalendarEntry.goal_id == goal.id,
+                StudyCalendarEntry.plan_date == last_entry.plan_date,
+                StudyCalendarEntry.status == "pending",
+            )
+            .count()
+        )
+        if entries_on_last_day < slots_per_day:
+            new_date = last_entry.plan_date
+            new_slot_order = entries_on_last_day
+        else:
+            new_date = last_entry.plan_date + timedelta(days=1)
+            new_slot_order = 0
+    else:
+        new_date = max(today_ist, entry.plan_date + timedelta(days=1))
+        new_slot_order = 0
+
+    if new_date > goal.target_date:
+        return None  # can't fit before the deadline
+
+    sorted_slots = sorted(time_slots, key=lambda s: (s.start_time.hour, s.start_time.minute))
+    slot = sorted_slots[new_slot_order % len(sorted_slots)]
+
+    new_entry = StudyCalendarEntry(
+        goal_id=entry.goal_id,
+        plan_date=new_date,
+        slot_label=slot.label,
+        slot_order=new_slot_order,
+        syllabus_id=entry.syllabus_id,
+        chapter_id=entry.chapter_id,
+        topic_title=entry.topic_title,
+        subject_name=entry.subject_name,
+        chapter_name=entry.chapter_name,
+        subtopic_title=entry.subtopic_title,
+        subtopic_index=entry.subtopic_index,
+        subtopic_total=entry.subtopic_total,
+        difficulty=entry.difficulty,
+        duration_mins=entry.duration_mins,
+        content_ids=entry.content_ids,
+        status="pending",
+        is_revision=False,
+        original_date=entry.plan_date,
+    )
+    db.add(new_entry)
+    return new_entry
+
+
 def _reschedule_missed_sessions(db) -> int:
     """
     Find pending sessions from past dates and reschedule them.
@@ -38,7 +138,6 @@ def _reschedule_missed_sessions(db) -> int:
     now_ist = datetime.now(timezone.utc) + _IST_OFFSET
     today_ist = now_ist.date()
 
-    # Find missed (pending sessions from past dates)
     missed = (
         db.query(StudyCalendarEntry)
         .join(StudyGoal, StudyGoal.id == StudyCalendarEntry.goal_id)
@@ -51,97 +150,9 @@ def _reschedule_missed_sessions(db) -> int:
     )
 
     rescheduled_count = 0
-
     for entry in missed:
-        # Mark as skipped
-        entry.status = "skipped"
-
-        # Count how many times this chapter has been rescheduled
-        reschedule_count = (
-            db.query(StudyCalendarEntry)
-            .filter(
-                StudyCalendarEntry.goal_id == entry.goal_id,
-                StudyCalendarEntry.chapter_id == entry.chapter_id,
-                StudyCalendarEntry.is_revision == False,
-                StudyCalendarEntry.original_date.isnot(None),
-            )
-            .count()
-        )
-
-        if reschedule_count >= _MAX_RESCHEDULE_PER_TOPIC:
-            continue  # Stop rescheduling after max attempts
-
-        # Find next available date
-        goal = db.query(StudyGoal).filter(StudyGoal.id == entry.goal_id).first()
-        if not goal:
-            continue
-
-        time_slots = goal.time_slots
-        if not time_slots:
-            continue
-
-        slots_per_day = len(time_slots)
-
-        # Find the latest date with entries
-        last_entry = (
-            db.query(StudyCalendarEntry)
-            .filter(
-                StudyCalendarEntry.goal_id == goal.id,
-                StudyCalendarEntry.status == "pending",
-            )
-            .order_by(StudyCalendarEntry.plan_date.desc(), StudyCalendarEntry.slot_order.desc())
-            .first()
-        )
-
-        if last_entry:
-            # Check if last day has room for another slot
-            entries_on_last_day = (
-                db.query(StudyCalendarEntry)
-                .filter(
-                    StudyCalendarEntry.goal_id == goal.id,
-                    StudyCalendarEntry.plan_date == last_entry.plan_date,
-                    StudyCalendarEntry.status == "pending",
-                )
-                .count()
-            )
-
-            if entries_on_last_day < slots_per_day:
-                new_date = last_entry.plan_date
-                new_slot_order = entries_on_last_day
-            else:
-                new_date = last_entry.plan_date + timedelta(days=1)
-                new_slot_order = 0
-        else:
-            new_date = today_ist
-            new_slot_order = 0
-
-        if new_date > goal.target_date:
-            # Can't reschedule past deadline — just skip
-            continue
-
-        # Determine slot label
-        sorted_slots = sorted(time_slots, key=lambda s: (s.start_time.hour, s.start_time.minute))
-        slot = sorted_slots[new_slot_order % len(sorted_slots)]
-
-        new_entry = StudyCalendarEntry(
-            goal_id=entry.goal_id,
-            plan_date=new_date,
-            slot_label=slot.label,
-            slot_order=new_slot_order,
-            syllabus_id=entry.syllabus_id,
-            chapter_id=entry.chapter_id,
-            topic_title=entry.topic_title,
-            subject_name=entry.subject_name,
-            chapter_name=entry.chapter_name,
-            difficulty=entry.difficulty,
-            duration_mins=entry.duration_mins,
-            content_ids=entry.content_ids,
-            status="pending",
-            is_revision=False,
-            original_date=entry.plan_date,
-        )
-        db.add(new_entry)
-        rescheduled_count += 1
+        if reschedule_entry(entry, db, mark_skipped=True):
+            rescheduled_count += 1
 
     return rescheduled_count
 

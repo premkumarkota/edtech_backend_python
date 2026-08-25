@@ -38,6 +38,7 @@ from app.models.study_planner_v2 import (                      # Depends on User
     GoalExam, GoalExamSubject,
     StudyGoal, StudyGoalSubject, StudyTimeSlot,
     StudyCalendarEntry, StudyMcqBank, StudyMcqAttempt,
+    StudyChapterSubtopic,
     StudyStreak, StudyBadge,
 )
 
@@ -66,7 +67,7 @@ __all__ = [
     # Study Planner V2
     "GoalExam", "GoalExamSubject",
     "StudyGoal", "StudyGoalSubject", "StudyTimeSlot",
-    "StudyCalendarEntry", "StudyMcqBank", "StudyMcqAttempt",
+    "StudyCalendarEntry", "StudyMcqBank", "StudyMcqAttempt", "StudyChapterSubtopic",
     "StudyStreak", "StudyBadge",
     # Notifications
     "Notification",

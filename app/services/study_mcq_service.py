@@ -106,22 +106,44 @@ def get_or_generate_mcq(
     if cached and isinstance(cached.questions, list) and len(cached.questions) >= 5:
         return cached, "cache"
 
-    # Prefer published quiz-bank questions before calling the LLM
-    fallback_questions = _try_quiz_bank_fallback(entry.chapter_id, db)
+    # A subtopic session must get questions scoped to THAT subtopic. The published
+    # chapter quiz isn't subtopic-aware and would hand every session of the chapter
+    # the same 10 questions, so we skip that fallback for subtopic sessions and let
+    # the LLM generate against the subtopic. Whole-chapter sessions may still reuse
+    # the chapter quiz bank.
+    is_subtopic = bool(getattr(entry, "subtopic_title", None))
+
+    fallback_questions = None if is_subtopic else _try_quiz_bank_fallback(entry.chapter_id, db)
     source: McqSource = "quiz_bank"
 
     if not fallback_questions:
         source = "llm"
         chapter = db.query(Chapter).filter(Chapter.id == entry.chapter_id).first() if entry.chapter_id else None
-        topic_context = entry.topic_title
-        if chapter and chapter.description:
-            topic_context += f"\n\nChapter description: {chapter.description}"
-        if entry.subject_name:
-            topic_context = f"Subject: {entry.subject_name}\nTopic: {topic_context}"
+
+        if is_subtopic:
+            # Focus strictly on this subtopic within the chapter.
+            topic_context = f"Sub-topic: {entry.subtopic_title}"
+            if entry.chapter_name:
+                topic_context += f"\nChapter: {entry.chapter_name}"
+            if chapter and chapter.description:
+                topic_context += f"\n\nChapter reference (for context only):\n{chapter.description}"
+            if entry.subject_name:
+                topic_context = f"Subject: {entry.subject_name}\n{topic_context}"
+            scope_instruction = (
+                f"Generate 10 MCQ questions ONLY about the sub-topic "
+                f"\"{entry.subtopic_title}\". Do not ask about other parts of the chapter.\n\n"
+            )
+        else:
+            topic_context = entry.topic_title
+            if chapter and chapter.description:
+                topic_context += f"\n\nChapter description: {chapter.description}"
+            if entry.subject_name:
+                topic_context = f"Subject: {entry.subject_name}\nTopic: {topic_context}"
+            scope_instruction = "Generate 10 MCQ questions for:\n"
 
         messages = [
             {"role": "system", "content": _MCQ_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Generate 10 MCQ questions for:\n{topic_context}"},
+            {"role": "user", "content": f"{scope_instruction}{topic_context}"},
         ]
 
         result = chat_completion_json(messages=messages, temperature=0.5, max_tokens=3000)

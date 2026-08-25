@@ -149,6 +149,9 @@ class CalendarEntryResponse(BaseModel):
     topic_title: str
     subject_name: Optional[str] = None
     chapter_name: Optional[str] = None
+    subtopic_title: Optional[str] = None
+    subtopic_index: Optional[int] = None
+    subtopic_total: Optional[int] = None
     syllabus_id: Optional[int] = None
     chapter_id: Optional[int] = None
     difficulty: str = "medium"
@@ -193,6 +196,9 @@ class TodaySessionResponse(BaseModel):
     topic_title: str
     subject_name: Optional[str] = None
     chapter_name: Optional[str] = None
+    subtopic_title: Optional[str] = None
+    subtopic_index: Optional[int] = None
+    subtopic_total: Optional[int] = None
     syllabus_id: Optional[int] = None
     chapter_id: Optional[int] = None
     difficulty: str = "medium"
@@ -224,6 +230,20 @@ class SessionStartResponse(BaseModel):
     contents: List[ContentInfo] = []
     has_materials: bool = False
     message: str = ""
+    # Structured header fields so the app can show "Chapter › Subtopic" and
+    # "Session i of N" instead of a generic message string.
+    topic_title: str = ""
+    subject_name: Optional[str] = None
+    chapter_name: Optional[str] = None
+    subtopic_title: Optional[str] = None
+    subtopic_index: Optional[int] = None
+    subtopic_total: Optional[int] = None
+
+
+class SessionSkipResponse(BaseModel):
+    message: str
+    rescheduled: bool = False
+    rescheduled_date: Optional[date] = None
 
 
 class McqGenerateRequest(BaseModel):
