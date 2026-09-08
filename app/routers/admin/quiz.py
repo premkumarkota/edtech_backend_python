@@ -24,6 +24,7 @@ from app.schemas.quiz import (
 )
 from app.services.excel_parser import parse_quiz_excel
 from app.services.ai_quiz_service import generate_quiz, refine_questions, AIQuizError
+from app.public_errors import http_from_ai_error, public_validation_error
 
 router = APIRouter()
 
@@ -61,7 +62,7 @@ def ai_generate_quiz(
         )
     except AIQuizError as e:
         # 502: upstream AI failure (bad key, API error, empty result)
-        raise HTTPException(status_code=502, detail=str(e))
+        raise http_from_ai_error(e)
 
     questions_data = result["questions"]
     if not questions_data:
@@ -172,7 +173,7 @@ def ai_refine_quiz(
             is_mock=is_mock,
         )
     except AIQuizError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise http_from_ai_error(e)
 
     questions_data = result["questions"]
     if not questions_data:
@@ -252,7 +253,7 @@ async def upload_quiz_excel(
     try:
         questions_data = parse_quiz_excel(contents)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise public_validation_error(e)
 
     # Delete existing questions and all related data (attempts, answers) to allow a clean replace
     # We delete answers first, then attempts, then questions to respect FK constraints

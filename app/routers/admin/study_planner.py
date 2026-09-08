@@ -89,7 +89,7 @@ def backfill_subtopics(
                 "goal_id": goal.id,
                 "student_id": goal.student_id,
                 "status": "error",
-                "message": str(e),
+                "message": "Couldn't regenerate this plan. Try again.",
             })
 
     return {

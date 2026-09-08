@@ -113,7 +113,10 @@ def send_chat_message(
     except Exception as e:
         logger.error(f"AI chat error: {e}", exc_info=True)
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"AI chat error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Couldn't send that message. Please try again.",
+        )
 
     # Extract smart actions from AI reply + user intent
     smart_actions = extract_smart_actions(

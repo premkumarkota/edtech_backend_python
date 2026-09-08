@@ -23,6 +23,7 @@ from app.models.syllabus import Syllabus, Chapter
 from app.models.category import Category
 from app.schemas.quiz import MockTestGenerate, QuizResponse
 from app.services.ai_quiz_service import generate_mock_test, AIQuizError
+from app.public_errors import http_from_ai_error
 
 router = APIRouter()
 
@@ -124,7 +125,7 @@ def ai_generate_mock_test(
             subject=subject_label,
         )
     except AIQuizError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise http_from_ai_error(e)
 
     questions_data = result["questions"]
     if not questions_data:

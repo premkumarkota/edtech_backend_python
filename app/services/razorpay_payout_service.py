@@ -71,7 +71,7 @@ def _post(path: str, payload: dict) -> dict:
             detail = error_body
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Razorpay error: {detail}",
+            detail="Couldn't complete this payout. Check the bank details and try again.",
         )
 
     return response.json()

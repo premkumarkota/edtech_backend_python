@@ -88,14 +88,14 @@ def _call_claude(user_prompt: str, empty_msg: str) -> str:
     api_key = (getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
     if not api_key:
         raise AIContentError(
-            "ANTHROPIC_API_KEY is not configured. Add it to .env.dev and restart."
+            "AI is not set up on this server yet. Add the Anthropic API key and restart."
         )
 
     try:
         import anthropic
     except ImportError as e:
         raise AIContentError(
-            "The 'anthropic' package is not installed. Run: pip install anthropic"
+            "AI is not set up on this server yet. Install the Anthropic package and restart."
         ) from e
 
     model = (getattr(settings, "ANTHROPIC_MODEL", "") or "claude-sonnet-5").strip()
@@ -110,7 +110,9 @@ def _call_claude(user_prompt: str, empty_msg: str) -> str:
         )
     except Exception as e:
         logger.error(f"AI content call failed: {e}")
-        raise AIContentError(f"AI generation failed: {e}") from e
+        raise AIContentError(
+            "AI generation is temporarily unavailable. Please try again in a moment."
+        ) from e
 
     text = "".join(
         block.text for block in response.content if getattr(block, "type", None) == "text"

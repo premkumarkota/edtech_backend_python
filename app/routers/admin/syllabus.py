@@ -36,6 +36,7 @@ from app.schemas.syllabus_admin_requests import (
 from app.services.ai_content_service import generate_content, refine_content, AIContentError
 from app.schemas.quiz import ChapterQuizGenerate, QuizResponse, QuizQuestionWithAnswer
 from app.services.ai_quiz_service import generate_from_content, AIQuizError
+from app.public_errors import http_from_ai_error
 from app.services.syllabus_layout import syllabus_to_detail_with_layout, chapter_to_layout_response
 from app.services.storage_service import (
     upload_file,
@@ -437,7 +438,7 @@ def ai_generate_chapter_quiz(
             chapter=c.title,
         )
     except AIQuizError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise http_from_ai_error(e)
 
     questions_data = result["questions"]
     if not questions_data:
@@ -532,7 +533,7 @@ def ai_generate_chapter_content(
                 level=level,
             )
     except AIContentError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise http_from_ai_error(e)
 
     c.description = content
     c.content_published = False  # draft — admin must review & publish

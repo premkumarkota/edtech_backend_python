@@ -89,14 +89,13 @@ def _run_generation(
     api_key = (getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
     if not api_key:
         raise AIQuizError(
-            "ANTHROPIC_API_KEY is not configured. Add it to .env.dev "
-            "(ANTHROPIC_API_KEY=sk-ant-...) and restart the server."
+            "AI is not set up on this server yet. Add the Anthropic API key and restart."
         )
     try:
         import anthropic
     except ImportError as e:
         raise AIQuizError(
-            "The 'anthropic' package is not installed. Run: pip install anthropic"
+            "AI is not set up on this server yet. Install the Anthropic package and restart."
         ) from e
 
     model = (getattr(settings, "ANTHROPIC_MODEL", "") or "claude-sonnet-5").strip()
@@ -114,7 +113,9 @@ def _run_generation(
         )
     except Exception as e:
         logger.error(f"AI quiz generation failed: {e}")
-        raise AIQuizError(f"AI generation failed: {e}") from e
+        raise AIQuizError(
+            "AI generation is temporarily unavailable. Please try again in a moment."
+        ) from e
 
     quiz = getattr(response, "parsed_output", None)
     if not quiz or not quiz.questions:

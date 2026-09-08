@@ -5,6 +5,7 @@ from typing import List
 from app.database import get_db
 from app.dependencies import get_current_admin
 from app.models.user import User, UserRole
+from app.public_errors import public_server_error
 from app.schemas.admin import StudentListItem, TeacherListItem, UserStatsResponse
 import firebase_admin.auth as firebase_auth
 
@@ -173,10 +174,7 @@ def delete_user(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete user: {str(e)}"
-        )
+        raise public_server_error(e, action="delete this user")
     return {"message": f"User {user_id} permanently deleted"}
 
 

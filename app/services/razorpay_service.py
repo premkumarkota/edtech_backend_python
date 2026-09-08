@@ -42,8 +42,8 @@ def create_razorpay_order(amount_inr: Decimal, receipt: str, notes: dict = None)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to create Razorpay order: {str(e)}"
-        )
+            detail="Payment gateway is unavailable. Please try again in a moment.",
+        ) from e
 
 
 def verify_payment_signature(

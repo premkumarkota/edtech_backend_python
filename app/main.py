@@ -1,10 +1,13 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+
+from app.public_errors import public_server_error
 
 from app.config import settings
 from app.database import engine, Base
@@ -129,6 +132,18 @@ UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 if not os.path.exists(UPLOADS_DIR):
     os.makedirs(UPLOADS_DIR, exist_ok=True)
 app.mount("/files", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Never leak tracebacks or SDK dumps to clients."""
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from fastapi.exceptions import RequestValidationError
+
+    if isinstance(exc, (StarletteHTTPException, RequestValidationError)):
+        raise exc
+    http = public_server_error(exc, action="complete this request")
+    return JSONResponse(status_code=http.status_code, content={"detail": http.detail})
 
 # ═══════════════════════════════════════════════════════════════
 # ADMIN PORTAL APIs

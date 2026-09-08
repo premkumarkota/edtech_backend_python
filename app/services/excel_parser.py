@@ -25,8 +25,8 @@ def parse_quiz_excel(file_bytes: bytes) -> List[Dict[str, Any]]:
 
     try:
         wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-    except Exception as e:
-        raise ValueError(f"Cannot open Excel file: {e}")
+    except Exception:
+        raise ValueError("This file isn't a valid Excel workbook. Upload a .xlsx file.")
 
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
