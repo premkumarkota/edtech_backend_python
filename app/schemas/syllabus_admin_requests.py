@@ -29,3 +29,4 @@ class AIChapterContentRequest(BaseModel):
     # When provided (and the chapter already has content), the AI REFINES the
     # existing content with this instruction instead of generating from scratch.
     instruction: Optional[str] = None
+    language: str = "english"  # english | telugu — language the AI writes in

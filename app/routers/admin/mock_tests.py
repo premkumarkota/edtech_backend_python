@@ -123,6 +123,7 @@ def ai_generate_mock_test(
             difficulty=payload.difficulty,
             marks_per_question=1,
             subject=subject_label,
+            language=payload.language,
         )
     except AIQuizError as e:
         raise http_from_ai_error(e)

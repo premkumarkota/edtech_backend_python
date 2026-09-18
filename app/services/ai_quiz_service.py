@@ -16,6 +16,7 @@ from typing import List, Literal
 from pydantic import BaseModel
 
 from app.config import settings
+from app.services.ai_language import language_directive
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,8 @@ def _difficulty_phrase(difficulty: str) -> str:
 
 
 def _run_generation(
-    user_prompt: str, marks_per_question: int, fallback_title: str
+    user_prompt: str, marks_per_question: int, fallback_title: str,
+    language: str = "english",
 ) -> dict:
     """Shared Claude structured-output call → {title, questions[]}."""
     api_key = (getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
@@ -100,6 +102,7 @@ def _run_generation(
 
     model = (getattr(settings, "ANTHROPIC_MODEL", "") or "claude-sonnet-5").strip()
     marks_per_question = max(1, int(marks_per_question))
+    system_prompt = _QUIZ_SYSTEM + language_directive(language)
 
     client = anthropic.Anthropic(api_key=api_key)
     try:
@@ -107,7 +110,7 @@ def _run_generation(
             model=model,
             max_tokens=16000,
             thinking={"type": "disabled"},
-            system=_QUIZ_SYSTEM,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
             output_format=GeneratedQuiz,
         )
@@ -144,6 +147,7 @@ def generate_quiz(
     num_questions: int = 10,
     marks_per_question: int = 1,
     subject: str = "",
+    language: str = "english",
 ) -> dict:
     """Generate a quiz from a topic string (legacy path)."""
     num_questions = max(1, min(int(num_questions), 30))
@@ -151,6 +155,7 @@ def generate_quiz(
         _build_prompt(category_name, (subject or "").strip(), topic, difficulty, num_questions),
         marks_per_question,
         f"{topic} - {difficulty.title()} Quiz",
+        language=language,
     )
 
 
@@ -161,6 +166,7 @@ def generate_from_content(
     marks_per_question: int = 1,
     subject: str = "",
     chapter: str = "",
+    language: str = "english",
 ) -> dict:
     """Generate a CHAPTER quiz grounded in the chapter's study content."""
     content = (content or "").strip()
@@ -185,7 +191,9 @@ def generate_from_content(
         "- 'explanation' (1-2 sentences) references the relevant idea from the content.\n"
         f"- 'title' is a short quiz title for this chapter (e.g. '{chapter or 'Chapter'} Quiz')."
     )
-    return _run_generation(prompt, marks_per_question, f"{chapter or 'Chapter'} Quiz")
+    return _run_generation(
+        prompt, marks_per_question, f"{chapter or 'Chapter'} Quiz", language=language
+    )
 
 
 # ── Refine (edit an existing question set with an admin instruction) ───────────
@@ -253,6 +261,7 @@ def refine_questions(
     topic: str = "",
     fallback_title: str = "Quiz",
     is_mock: bool = False,
+    language: str = "english",
 ) -> dict:
     """Revise an existing question set according to an admin instruction.
 
@@ -273,7 +282,7 @@ def refine_questions(
         (topic or "").strip(),
         is_mock,
     )
-    return _run_generation(prompt, marks_per_question, fallback_title)
+    return _run_generation(prompt, marks_per_question, fallback_title, language=language)
 
 
 def generate_mock_test(
@@ -283,6 +292,7 @@ def generate_mock_test(
     difficulty: str = "mixed",
     marks_per_question: int = 1,
     subject: str = "",
+    language: str = "english",
 ) -> dict:
     """
     Generate a MOCK TEST spanning multiple chapters.
@@ -313,4 +323,6 @@ def generate_mock_test(
         "- 'explanation' is 1-2 sentences.\n"
         f"- 'title' is a short exam title (e.g. '{subject} — {scope_label}')."
     )
-    return _run_generation(prompt, marks_per_question, f"{subject} — {scope_label}")
+    return _run_generation(
+        prompt, marks_per_question, f"{subject} — {scope_label}", language=language
+    )

@@ -436,6 +436,7 @@ def ai_generate_chapter_quiz(
             marks_per_question=payload.marks_per_question,
             subject=subject_name,
             chapter=c.title,
+            language=payload.language,
         )
     except AIQuizError as e:
         raise http_from_ai_error(e)
@@ -523,6 +524,7 @@ def ai_generate_chapter_content(
                 level=level,
                 subject=subject_name,
                 chapter=c.title,
+                language=payload.language,
             )
         else:
             content = generate_content(
@@ -531,6 +533,7 @@ def ai_generate_chapter_content(
                 chapter=c.title,
                 topic=topic,
                 level=level,
+                language=payload.language,
             )
     except AIContentError as e:
         raise http_from_ai_error(e)

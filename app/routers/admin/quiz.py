@@ -59,6 +59,7 @@ def ai_generate_quiz(
             difficulty=(payload.difficulty or "medium").strip(),
             num_questions=payload.num_questions,
             marks_per_question=payload.marks_per_question,
+            language=payload.language,
         )
     except AIQuizError as e:
         # 502: upstream AI failure (bad key, API error, empty result)
@@ -171,6 +172,7 @@ def ai_refine_quiz(
             topic=quiz.title or "",
             fallback_title=quiz.title or ("Mock Test" if is_mock else "Quiz"),
             is_mock=is_mock,
+            language=payload.language,
         )
     except AIQuizError as e:
         raise http_from_ai_error(e)

@@ -26,6 +26,7 @@ class AIQuizGenerate(BaseModel):
     duration_mins: int = 30
     pass_marks: int = 0
     marks_per_question: int = 1
+    language: str = "english"        # english | telugu — language the AI writes in
 
 
 class AIQuizRefine(BaseModel):
@@ -38,6 +39,7 @@ class AIQuizRefine(BaseModel):
     instruction: str
     difficulty: Optional[str] = None
     marks_per_question: int = 1
+    language: str = "english"        # english | telugu — language the AI writes in
 
 
 class QuizResponse(BaseModel):
@@ -71,6 +73,7 @@ class ChapterQuizGenerate(BaseModel):
     marks_per_question: int = 1
     pass_marks: int = 0                # threshold; 0 = auto (60% of total)
     require_pass: bool = True          # fail => student must retake
+    language: str = "english"          # english | telugu — language the AI writes in
 
 
 class MockTestGenerate(BaseModel):
@@ -85,6 +88,7 @@ class MockTestGenerate(BaseModel):
     duration_mins: int = 60
     pass_marks: int = 0
     negative_marking: bool = False
+    language: str = "english"          # english | telugu — language the AI writes in
 
 
 # ── QuizQuestion ──────────────────────────────────────────────────

@@ -12,6 +12,7 @@ Config (app/config.py / .env.dev):
 import logging
 
 from app.config import settings
+from app.services.ai_language import language_directive
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def _build_refine_prompt(
     )
 
 
-def _call_claude(user_prompt: str, empty_msg: str) -> str:
+def _call_claude(user_prompt: str, empty_msg: str, language: str = "english") -> str:
     """Shared Claude call for generate + refine. Raises AIContentError on failure."""
     api_key = (getattr(settings, "ANTHROPIC_API_KEY", "") or "").strip()
     if not api_key:
@@ -99,13 +100,14 @@ def _call_claude(user_prompt: str, empty_msg: str) -> str:
         ) from e
 
     model = (getattr(settings, "ANTHROPIC_MODEL", "") or "claude-sonnet-5").strip()
+    system_prompt = _SYSTEM_PROMPT + language_directive(language)
     client = anthropic.Anthropic(api_key=api_key)
     try:
         response = client.messages.create(
             model=model,
             max_tokens=8000,
             thinking={"type": "disabled"},
-            system=_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
     except Exception as e:
@@ -128,6 +130,7 @@ def generate_content(
     chapter: str,
     topic: str,
     level: str,
+    language: str = "english",
 ) -> str:
     """Generate rich Markdown chapter content from scratch."""
     topic = (topic or "").strip()
@@ -137,6 +140,7 @@ def generate_content(
     return _call_claude(
         _build_prompt(category_name or "", subject or "", chapter or "", topic, level),
         "The AI returned empty content. Try again or refine the topic.",
+        language=language,
     )
 
 
@@ -146,6 +150,7 @@ def refine_content(
     level: str = "General",
     subject: str = "",
     chapter: str = "",
+    language: str = "english",
 ) -> str:
     """Revise existing Markdown content according to an admin instruction."""
     instruction = (instruction or "").strip()
@@ -158,4 +163,5 @@ def refine_content(
             current_content, instruction, (level or "General").strip(), subject or "", chapter or ""
         ),
         "The AI returned empty content. Try rephrasing your instruction.",
+        language=language,
     )
