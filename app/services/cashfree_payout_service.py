@@ -332,3 +332,49 @@ def verify_webhook_signature(raw_body: bytes, signature: str, timestamp: str) ->
     ).digest()
     expected = base64.b64encode(digest).decode()
     return hmac.compare_digest(expected, signature)
+
+
+# ── Wallet balance ────────────────────────────────────────────────────────────
+# Balance is only exposed on Cashfree's V1 API, which needs a short-lived
+# bearer token from /v1/authorize (same client id/secret + 2FA signature).
+
+_V1_HOSTS = {
+    "test": "https://sandbox.cashfree.com",
+    "prod": "https://payout-api.cashfree.com",
+}
+
+
+def get_wallet_balance() -> Optional[dict]:
+    """
+    Return {"available": Decimal, "ledger": Decimal} for the payout wallet,
+    or None if Cashfree can't be reached. Never raises — it only feeds a
+    dashboard figure, and must not break the withdrawals screen.
+    """
+    if not is_configured():
+        return None
+    env = settings.CASHFREE_PAYOUT_ENV.lower()
+    host = _V1_HOSTS["prod" if env in ("prod", "production", "live") else "test"]
+    try:
+        auth_headers = {
+            "X-Client-Id": settings.CASHFREE_PAYOUT_CLIENT_ID,
+            "X-Client-Secret": settings.CASHFREE_PAYOUT_CLIENT_SECRET,
+        }
+        if signature := _signature():
+            auth_headers["X-Cf-Signature"] = signature
+        auth = httpx.post(f"{host}/payout/v1/authorize", headers=auth_headers, timeout=15).json()
+        token = (auth.get("data") or {}).get("token")
+        if not token:
+            logger.warning(f"Cashfree authorize failed: {auth.get('subCode')} {auth.get('message')}")
+            return None
+        data = httpx.get(
+            f"{host}/payout/v1.2/getBalance",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        ).json().get("data") or {}
+        return {
+            "available": Decimal(str(data.get("availableBalance", "0"))),
+            "ledger": Decimal(str(data.get("balance", "0"))),
+        }
+    except Exception as exc:
+        logger.warning(f"Cashfree balance lookup failed: {exc}")
+        return None

@@ -4,6 +4,7 @@ Admin Withdrawal API
 GET  /api/admin/withdrawals?status=pending    List withdrawal requests
 GET  /api/admin/withdrawals/{id}              Withdrawal detail
 POST /api/admin/withdrawals/{id}/process      Trigger payout (Cashfree or Razorpay X)
+GET  /api/admin/withdrawals/overview          Pipeline totals + Cashfree wallet
 POST /api/admin/withdrawals/{id}/sync         Re-check Cashfree status (missed webhook)
 POST /api/admin/withdrawals/{id}/reject       Reject with reason
 
@@ -16,15 +17,16 @@ Security:
 """
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import require_admin
 from app.models.user import User
-from app.models.payout import TeacherEarning
 from app.models.withdrawal import TeacherBankDetails, WithdrawalRequest
 from app.schemas.withdrawal import (
     AdminWithdrawalResponse,
@@ -34,6 +36,7 @@ from app.schemas.withdrawal import (
 from app.config import settings
 from app.services import cashfree_payout_service as cashfree
 from app.services import razorpay_payout_service as rp
+from app.services.teacher_wallet import get_min_withdrawal
 from app.services.withdrawal_settlement import (
     mark_withdrawal_completed,
     mark_withdrawal_failed,
@@ -86,6 +89,57 @@ def list_withdrawals(
     if status_filter and status_filter != "all":
         q = q.filter(WithdrawalRequest.status == status_filter)
     return [_build_response(w) for w in q.all()]
+
+
+# ── Overview (pipeline + wallet) ──────────────────────────────────────────────
+# Declared before "/{withdrawal_id}" so "overview" isn't parsed as an id.
+
+@router.get("/overview")
+def withdrawals_overview(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    One call for the admin Withdrawals header:
+      pipeline — count + total per status
+      wallet   — Cashfree available balance and whether it covers what's
+                 waiting for approval (null if Cashfree is unreachable)
+      minimum_withdrawal — admin-set minimum per request
+    """
+    rows = (
+        db.query(
+            WithdrawalRequest.status,
+            func.count(WithdrawalRequest.id),
+            func.coalesce(func.sum(WithdrawalRequest.amount), 0),
+        )
+        .group_by(WithdrawalRequest.status)
+        .all()
+    )
+    pipeline = {
+        s: {"count": 0, "amount": Decimal("0.00")}
+        for s in ("pending", "processing", "completed", "failed", "rejected")
+    }
+    for s, count, amount in rows:
+        pipeline[s] = {"count": count, "amount": Decimal(str(amount)).quantize(Decimal("0.01"))}
+
+    wallet = None
+    if settings.PAYOUT_PROVIDER.lower() == "cashfree":
+        balance = cashfree.get_wallet_balance()
+        if balance is not None:
+            waiting = pipeline["pending"]["amount"]
+            wallet = {
+                "available": balance["available"],
+                "ledger": balance["ledger"],
+                "environment": settings.CASHFREE_PAYOUT_ENV.lower(),
+                "covers_pending": balance["available"] >= waiting,
+                "shortfall": max(waiting - balance["available"], Decimal("0.00")),
+            }
+
+    return {
+        "pipeline": pipeline,
+        "wallet": wallet,
+        "minimum_withdrawal": get_min_withdrawal(db),
+    }
 
 
 # ── Detail ────────────────────────────────────────────────────────────────────
