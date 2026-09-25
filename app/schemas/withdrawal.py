@@ -97,10 +97,12 @@ class WithdrawalRequestResponse(BaseModel):
 
 class WithdrawalBalanceResponse(BaseModel):
     """How much the teacher can withdraw right now."""
-    available_balance: Decimal     # sum of pending TeacherEarning.gross_earning
-    pending_sessions: int          # count of pending earning rows
+    available_balance: Decimal     # earned − withdrawn − in-flight (teacher_wallet)
+    pending_sessions: int          # number of paid sessions (earning rows)
     active_withdrawal: Optional[WithdrawalRequestResponse]  # if one is in flight
-    minimum_withdrawal: Decimal = Decimal("1.00")
+    minimum_withdrawal: Decimal = Decimal("1.00")   # admin-set (PlatformConfig)
+    total_earned: Decimal = Decimal("0.00")
+    total_withdrawn: Decimal = Decimal("0.00")
 
 
 # ── Admin schemas ─────────────────────────────────────────────────────────────
@@ -114,7 +116,8 @@ class AdminWithdrawalResponse(BaseModel):
     amount: Decimal
     status: str
     bank_snapshot: Optional[str]
-    razorpay_payout_id: Optional[str]
+    razorpay_payout_id: Optional[str]          # legacy name — provider transfer id
+    payout_reference: Optional[str] = None     # same value; Cashfree cf_transfer_id
     admin_notes: Optional[str]
     rejection_reason: Optional[str]
     failure_reason: Optional[str]
@@ -127,7 +130,7 @@ class AdminWithdrawalResponse(BaseModel):
 
 
 class AdminProcessWithdrawalRequest(BaseModel):
-    """Admin body when triggering the Razorpay payout."""
+    """Admin body when triggering the teacher payout."""
     notes: Optional[str] = None
 
 

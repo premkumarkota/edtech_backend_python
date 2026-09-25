@@ -10,6 +10,7 @@ from app.models.teacher_profile import TeacherProfile, TeacherStatus
 from app.models.subscription import StudentSubscription, SubscriptionPlan, SubscriptionStatus
 from app.models.session import VideoCallSession, SessionStatus
 from app.models.payout import TeacherEarning, TeacherPayout
+from app.models.withdrawal import WithdrawalRequest
 from app.schemas.stats import (
     AdminStatsResponse, UserStats, RevenueStats, RevenuByPlanItem,
     SubscriptionStats, SessionStats, PayoutStats,
@@ -113,17 +114,24 @@ def get_admin_stats(
     ).filter(VideoCallSession.status == SessionStatus.COMPLETED).scalar() or 0
 
     # ── PAYOUT STATS ──────────────────────────────────────────────────────────
-    pending_earnings = float(
+    # Ledger view (same model as teacher_wallet): paid = legacy batch payouts
+    # + completed withdrawals; pending = everything earned but not yet paid out.
+    total_earned = float(
+        db.query(func.coalesce(func.sum(TeacherEarning.gross_earning), 0)).scalar() or 0
+    )
+    legacy_paid = float(
         db.query(func.coalesce(func.sum(TeacherEarning.gross_earning), 0)).filter(
-            TeacherEarning.payout_status == "pending"
+            TeacherEarning.payout_status == "paid",
+            TeacherEarning.payout_batch_id.isnot(None),
         ).scalar() or 0
     )
-
-    paid_all_time = float(
-        db.query(func.coalesce(func.sum(TeacherEarning.gross_earning), 0)).filter(
-            TeacherEarning.payout_status == "paid"
+    withdrawn = float(
+        db.query(func.coalesce(func.sum(WithdrawalRequest.amount), 0)).filter(
+            WithdrawalRequest.status == "completed"
         ).scalar() or 0
     )
+    paid_all_time = legacy_paid + withdrawn
+    pending_earnings = max(total_earned - paid_all_time, 0.0)
 
     teachers_with_pending = db.query(func.count(func.distinct(TeacherEarning.teacher_id))).filter(
         TeacherEarning.payout_status == "pending"

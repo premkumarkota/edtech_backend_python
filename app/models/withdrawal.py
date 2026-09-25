@@ -78,8 +78,8 @@ class WithdrawalRequest(Base):
 
     Security invariants (enforced in router):
     - teacher can only request for their own earnings
-    - amount <= sum of all pending TeacherEarning.gross_earning for that teacher
-    - amount >= MIN_WITHDRAWAL_AMOUNT (₹100)
+    - amount <= wallet available balance (teacher_wallet.get_wallet)
+    - amount >= admin-set minimum (PlatformConfig 'min_withdrawal_amount')
     - only one active (pending/processing) request allowed per teacher at a time
     - bank_snapshot is written at request time and never mutated
     - only admin can transition to processing/rejected

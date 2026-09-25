@@ -29,6 +29,7 @@ from app.schemas.session import (
 )
 from app.schemas.payout import TeacherEarningItem, TeacherEarningSummary
 from app.services.payout_service import create_teacher_earning
+from app.services.teacher_wallet import get_wallet
 from app.utils.fcm import (
     notify_student_session_cancelled,
     notify_student_incoming_call,
@@ -507,12 +508,18 @@ def my_earnings(
 
     earnings = q.order_by(TeacherEarning.created_at.desc()).all()
 
-    total_pending = sum(
-        e.gross_earning for e in earnings if e.payout_status == "pending"
-    )
-    total_paid = sum(
-        e.gross_earning for e in earnings if e.payout_status == "paid"
-    )
+    if month or payout_status:
+        total_pending = sum(
+            e.gross_earning for e in earnings if e.payout_status == "pending"
+        )
+        total_paid = sum(
+            e.gross_earning for e in earnings if e.payout_status == "paid"
+        )
+    else:
+        # Unfiltered view → exact wallet figures (handles partial withdrawals)
+        wallet = get_wallet(teacher.id, db)
+        total_paid = wallet.total_withdrawn
+        total_pending = wallet.total_earned - wallet.total_withdrawn
 
     return TeacherEarningSummary(
         total_pending=total_pending,

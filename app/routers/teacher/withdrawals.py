@@ -15,19 +15,17 @@ Security:
 """
 import json
 import logging
-from decimal import Decimal
 from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_teacher
 from app.models.user import User
-from app.models.payout import TeacherEarning
 from app.models.withdrawal import TeacherBankDetails, WithdrawalRequest
+from app.services.teacher_wallet import get_min_withdrawal, get_wallet
 from app.schemas.withdrawal import (
     BankDetailsSave,
     BankDetailsResponse,
@@ -38,8 +36,6 @@ from app.schemas.withdrawal import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-MIN_WITHDRAWAL = Decimal("1.00")
 
 # Statuses that mean "a withdrawal is already in-flight"
 _ACTIVE_STATUSES = {"pending", "processing"}
@@ -52,25 +48,6 @@ def _mask_account(number: str) -> str:
     if not number or len(number) < 4:
         return "****"
     return f"****{number[-4:]}"
-
-
-def _get_pending_balance(teacher_id: int, db: Session) -> tuple[Decimal, int]:
-    """
-    Return (total_pending_amount, count_of_pending_earnings).
-    Only counts TeacherEarning rows with payout_status='pending'.
-    """
-    row = (
-        db.query(
-            func.coalesce(func.sum(TeacherEarning.gross_earning), Decimal("0.00")),
-            func.count(TeacherEarning.id),
-        )
-        .filter(
-            TeacherEarning.teacher_id == teacher_id,
-            TeacherEarning.payout_status == "pending",
-        )
-        .one()
-    )
-    return row[0], row[1]
 
 
 def _active_withdrawal(teacher_id: int, db: Session) -> WithdrawalRequest | None:
@@ -183,10 +160,10 @@ def get_withdrawal_balance(
     db: Session = Depends(get_db),
 ):
     """
-    Return the teacher's available withdrawal balance and any active request.
-    Available balance = sum of all pending TeacherEarning rows.
+    Return the teacher's wallet and any active request.
+    available_balance = everything earned − withdrawn − in-flight (see teacher_wallet).
     """
-    balance, count = _get_pending_balance(current_user.id, db)
+    wallet = get_wallet(current_user.id, db)
     active = _active_withdrawal(current_user.id, db)
 
     active_response = None
@@ -204,10 +181,12 @@ def get_withdrawal_balance(
         )
 
     return WithdrawalBalanceResponse(
-        available_balance=balance,
-        pending_sessions=count,
+        available_balance=wallet.available_balance,
+        pending_sessions=wallet.session_count,
         active_withdrawal=active_response,
-        minimum_withdrawal=MIN_WITHDRAWAL,
+        minimum_withdrawal=get_min_withdrawal(db),
+        total_earned=wallet.total_earned,
+        total_withdrawn=wallet.total_withdrawn,
     )
 
 
@@ -225,13 +204,16 @@ def request_withdrawal(
     Guards (all checked server-side — never trust client):
     1. Teacher must have bank details saved.
     2. No active (pending/processing) withdrawal already exists.
-    3. Requested amount >= MIN_WITHDRAWAL (₹1).
-    4. Requested amount <= actual pending earnings balance.
+    3. Requested amount >= admin-set minimum (PlatformConfig).
+    4. Requested amount <= wallet available balance.
+    The exact requested amount is what gets paid out.
     """
-    # Guard 1: bank details required
+    # Guard 1: bank details required. Row lock serialises concurrent requests
+    # from the same teacher so two taps can't both pass the balance check.
     bank = (
         db.query(TeacherBankDetails)
         .filter(TeacherBankDetails.teacher_id == current_user.id)
+        .with_for_update()
         .first()
     )
     if not bank:
@@ -249,14 +231,15 @@ def request_withdrawal(
         )
 
     # Guard 3: minimum amount (also validated in schema, belt-and-suspenders)
-    if payload.amount < MIN_WITHDRAWAL:
+    min_withdrawal = get_min_withdrawal(db)
+    if payload.amount < min_withdrawal:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Minimum withdrawal is ₹{MIN_WITHDRAWAL}.",
+            detail=f"Minimum withdrawal is ₹{min_withdrawal}.",
         )
 
     # Guard 4: amount <= available balance
-    balance, _ = _get_pending_balance(current_user.id, db)
+    balance = get_wallet(current_user.id, db).available_balance
     if payload.amount > balance:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

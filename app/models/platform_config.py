@@ -10,6 +10,7 @@ class PlatformConfig(Base):
 
     Current keys:
       max_teacher_rate_per_minute — ceiling on teacher proposed/approved rates (INR/min)
+      min_withdrawal_amount       — minimum teacher withdrawal per request (INR)
 
     Adding new platform settings: just INSERT a new row with a new key.
     No schema change needed.

@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # Find it in Razorpay Dashboard → Payouts → Settings → Account Number.
     RAZORPAY_ACCOUNT_NUMBER: str = ""
 
+    # Teacher payout rail: "cashfree" (live) | "razorpay" (legacy Razorpay X)
+    PAYOUT_PROVIDER: str = "cashfree"
+
+    # Cashfree Payouts (teacher withdrawals) — Payouts Dashboard → Developers → API Keys.
+    # These are PAYOUTS keys, not Payment Gateway keys.
+    CASHFREE_PAYOUT_ENV: str = "test"            # test | prod
+    CASHFREE_PAYOUT_CLIENT_ID: str = ""
+    CASHFREE_PAYOUT_CLIENT_SECRET: str = ""      # also signs V2 webhooks
+    # 2FA for prod without a static IP (Cloud Run): Developers → Two-Factor
+    # Authentication → Public Key. Paste the full PEM (newlines or literal \n).
+    CASHFREE_PAYOUT_PUBLIC_KEY: str = ""
+
     # Agora RTC
     AGORA_APP_ID: str = ""
     AGORA_APP_CERTIFICATE: str = ""

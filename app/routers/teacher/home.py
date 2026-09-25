@@ -16,9 +16,10 @@ from app.database import get_db
 from app.dependencies import get_current_teacher
 from app.models.user import User
 from app.models.teacher_profile import TeacherProfile, TeacherStatus
-from app.models.payout import TeacherRate, TeacherEarning
+from app.models.payout import TeacherRate
 from app.models.session import VideoCallSession, SessionStatus
 from app.models.category import Category
+from app.services.teacher_wallet import get_wallet
 
 router = APIRouter()
 
@@ -112,11 +113,8 @@ def teacher_home(
         VideoCallSession.scheduled_at > now,
     ).scalar() or 0
 
-    # Pending earnings
-    pending_earnings = db.query(func.coalesce(func.sum(TeacherEarning.gross_earning), 0)).filter(
-        TeacherEarning.teacher_id == teacher.id,
-        TeacherEarning.payout_status == "pending",
-    ).scalar()
+    # Wallet balance — earned minus withdrawn/in-flight (teacher_wallet)
+    pending_earnings = get_wallet(teacher.id, db).available_balance
 
     # Total sessions completed
     completed_count = db.query(func.count(VideoCallSession.id)).filter(

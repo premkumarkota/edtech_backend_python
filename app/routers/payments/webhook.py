@@ -1,6 +1,7 @@
 """
-Razorpay Webhook Handler
-POST /api/payments/webhook/razorpay
+Payment Webhook Handlers
+POST /api/payments/webhook/razorpay   — student payments (+ legacy Razorpay X payouts)
+POST /api/payments/webhook/cashfree   — Cashfree Payouts V2 (teacher withdrawals)
 
 No JWT auth — HMAC signature verification only.
 Source of truth for payment AND payout status.
@@ -15,8 +16,6 @@ Handles:
 """
 import json
 import logging
-from decimal import Decimal
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Request, Depends
@@ -25,12 +24,15 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.subscription import StudentSubscription
 from app.models.payment import RazorpayPayment
-from app.models.payout import TeacherEarning
 from app.models.withdrawal import WithdrawalRequest
-from app.models.user import User
+from app.services import cashfree_payout_service as cashfree_payouts
 from app.services.razorpay_service import verify_webhook_signature
 from app.services.subscription_service import activate_subscription, fail_subscription
-from app.utils.fcm import notify_withdrawal_completed, notify_withdrawal_failed
+from app.services.withdrawal_settlement import (
+    mark_withdrawal_completed,
+    mark_withdrawal_failed,
+    withdrawal_id_from_reference,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -137,84 +139,23 @@ async def razorpay_webhook(
     return {"status": "ok"}
 
 
-def _handle_payout_processed(payload: dict, db: Session) -> None:
-    """
-    Razorpay confirmed the payout reached the teacher's bank.
-
-    Steps (all in one transaction):
-      1. Find WithdrawalRequest by reference_id = "withdrawal_{id}".
-      2. Verify it's still in 'processing' status (idempotency guard).
-      3. Mark it as 'completed'.
-      4. Mark enough pending TeacherEarning rows as 'paid' (oldest-first)
-         to cover the withdrawal amount.
-      5. Send FCM to teacher.
-    """
-    payout_entity = payload["payload"]["payout"]["entity"]
-    reference_id: str = payout_entity.get("reference_id", "")
-    razorpay_payout_id: str = payout_entity.get("id", "")
-
-    if not reference_id.startswith("withdrawal_"):
-        logger.warning(f"payout.processed: unknown reference_id '{reference_id}' — skipping")
-        return
-
-    try:
-        withdrawal_id = int(reference_id.split("_", 1)[1])
-    except (ValueError, IndexError):
-        logger.error(f"payout.processed: cannot parse withdrawal id from '{reference_id}'")
-        return
-
+def _find_withdrawal(reference_id: str, event: str, db: Session) -> Optional[WithdrawalRequest]:
+    withdrawal_id = withdrawal_id_from_reference(reference_id)
+    if withdrawal_id is None:
+        logger.warning(f"{event}: unknown reference '{reference_id}' — skipping")
+        return None
     w = db.query(WithdrawalRequest).filter(WithdrawalRequest.id == withdrawal_id).first()
     if not w:
-        logger.error(f"payout.processed: WithdrawalRequest {withdrawal_id} not found")
-        return
+        logger.error(f"{event}: WithdrawalRequest {withdrawal_id} not found")
+    return w
 
-    if w.status == "completed":
-        logger.info(f"payout.processed: withdrawal {withdrawal_id} already completed — idempotent skip")
-        return
 
-    if w.status != "processing":
-        logger.warning(
-            f"payout.processed: withdrawal {withdrawal_id} is '{w.status}', "
-            "expected 'processing'. Marking completed anyway."
-        )
-
-    # Mark withdrawal completed
-    w.status       = "completed"
-    w.completed_at = datetime.now(timezone.utc)
-    db.flush()
-
-    # Mark pending earnings as paid (oldest-first up to withdrawal amount)
-    pending_earnings = (
-        db.query(TeacherEarning)
-        .filter(
-            TeacherEarning.teacher_id == w.teacher_id,
-            TeacherEarning.payout_status == "pending",
-        )
-        .order_by(TeacherEarning.created_at.asc())
-        .all()
-    )
-
-    settled = Decimal("0.00")
-    for earning in pending_earnings:
-        if settled >= w.amount:
-            break
-        earning.payout_status = "paid"
-        settled += earning.gross_earning
-
-    db.commit()
-    logger.info(
-        f"payout.processed: withdrawal {withdrawal_id} completed | "
-        f"₹{w.amount} | {razorpay_payout_id} | settled earnings: ₹{settled}"
-    )
-
-    # Notify teacher
-    teacher = db.query(User).filter(User.id == w.teacher_id).first()
-    if teacher and teacher.fcm_token:
-        notify_withdrawal_completed(
-            fcm_token=teacher.fcm_token,
-            amount=float(w.amount),
-            withdrawal_id=w.id,
-        )
+def _handle_payout_processed(payload: dict, db: Session) -> None:
+    """Razorpay confirmed the payout reached the teacher's bank."""
+    payout_entity = payload["payload"]["payout"]["entity"]
+    w = _find_withdrawal(payout_entity.get("reference_id", ""), "payout.processed", db)
+    if w:
+        mark_withdrawal_completed(w, payout_entity.get("id", ""), db)
 
 
 def _handle_payout_failed(payload: dict, event: str, db: Session) -> None:
@@ -224,49 +165,71 @@ def _handle_payout_failed(payload: dict, event: str, db: Session) -> None:
     Earnings remain 'pending' — they are NOT marked paid.
     """
     payout_entity = payload["payload"]["payout"]["entity"]
-    reference_id: str = payout_entity.get("reference_id", "")
     failure_detail = (
         payout_entity.get("status_details", {}).get("description", "")
         or payout_entity.get("status_details", {}).get("reason", "")
         or event
     )
+    w = _find_withdrawal(payout_entity.get("reference_id", ""), event, db)
+    if w:
+        mark_withdrawal_failed(w, failure_detail, db)
 
-    if not reference_id.startswith("withdrawal_"):
-        logger.warning(f"{event}: unknown reference_id '{reference_id}' — skipping")
-        return
+
+# ── Cashfree Payouts (teacher withdrawals) ────────────────────────────────────
+
+_CASHFREE_SUCCESS_EVENTS = {"TRANSFER_SUCCESS", "TRANSFER_ACKNOWLEDGED"}
+_CASHFREE_FAILED_EVENTS = {"TRANSFER_FAILED", "TRANSFER_REJECTED", "TRANSFER_REVERSED"}
+
+
+@router.post("/cashfree")
+async def cashfree_payout_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Cashfree Payouts V2 webhook (configure as version V2 in the Payouts Dashboard).
+    Signature: x-webhook-signature = base64(HMAC_SHA256(x-webhook-timestamp + raw body, client secret)).
+    Always returns 200; handlers are idempotent so Cashfree retries are harmless.
+    """
+    body = await request.body()
+    signature = request.headers.get("x-webhook-signature", "")
+    timestamp = request.headers.get("x-webhook-timestamp", "")
+
+    if not cashfree_payouts.verify_webhook_signature(body, signature, timestamp):
+        logger.warning("Invalid Cashfree payout webhook signature received.")
+        return {"status": "ignored"}
 
     try:
-        withdrawal_id = int(reference_id.split("_", 1)[1])
-    except (ValueError, IndexError):
-        logger.error(f"{event}: cannot parse withdrawal id from '{reference_id}'")
-        return
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        logger.error("Could not parse Cashfree webhook body as JSON.")
+        return {"status": "error"}
 
-    w = db.query(WithdrawalRequest).filter(WithdrawalRequest.id == withdrawal_id).first()
-    if not w:
-        logger.error(f"{event}: WithdrawalRequest {withdrawal_id} not found")
-        return
+    event = payload.get("type", "")
+    data = payload.get("data") or {}
+    logger.info(f"Cashfree payout webhook received: {event} for {data.get('transfer_id')}")
 
-    if w.status in ("completed", "failed"):
-        logger.info(f"{event}: withdrawal {withdrawal_id} already in terminal state — skip")
-        return
+    if event not in _CASHFREE_SUCCESS_EVENTS | _CASHFREE_FAILED_EVENTS:
+        return {"status": "ok"}   # LOW_BALANCE_ALERT, CREDIT_CONFIRMATION, etc.
 
-    w.status         = "failed"
-    w.failure_reason = failure_detail
-    w.completed_at   = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        w = _find_withdrawal(data.get("transfer_id", ""), event, db)
+        if not w:
+            return {"status": "ok"}
+        if event in _CASHFREE_SUCCESS_EVENTS:
+            mark_withdrawal_completed(w, str(data.get("cf_transfer_id", "")), db)
+        else:
+            reason = (
+                data.get("status_description")
+                or data.get("status_code")
+                or event
+            )
+            mark_withdrawal_failed(w, reason, db)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"ERROR processing Cashfree {event} webhook: {e}")
 
-    logger.warning(
-        f"{event}: withdrawal {withdrawal_id} failed | reason: {failure_detail}"
-    )
-
-    teacher = db.query(User).filter(User.id == w.teacher_id).first()
-    if teacher and teacher.fcm_token:
-        notify_withdrawal_failed(
-            fcm_token=teacher.fcm_token,
-            amount=float(w.amount),
-            withdrawal_id=w.id,
-            reason=failure_detail,
-        )
+    return {"status": "ok"}
 
 
 def _log_webhook_event(
