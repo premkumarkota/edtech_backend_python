@@ -1,31 +1,24 @@
 """
 Admin — Teacher Rate & Payout Management
-PUT    /api/admin/teacher-rates/{teacher_id}          Set per-minute rate
+PUT    /api/admin/teacher-rates/{teacher_id}          Set per-hour rate
 GET    /api/admin/teacher-rates/                      List all teacher rates
-POST   /api/admin/payouts/trigger                     Trigger payout batch
-GET    /api/admin/payouts/                            List all batches
-GET    /api/admin/payouts/{batch_id}                  Batch detail
-PATCH  /api/admin/payouts/{batch_id}/payouts/{id}/mark-paid   Mark paid
+
+The monthly payout-batch endpoints were removed (never used; could double-pay
+teachers alongside withdrawals). Teachers are paid via /api/admin/withdrawals.
 GET    /api/admin/subscriptions/                      View all student subscriptions
 PATCH  /api/admin/subscriptions/{id}/cancel           Force-cancel subscription
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime, timezone
 
 from app.database import get_db
 from app.dependencies import require_admin
 from app.models.user import User, UserRole
-from app.models.payout import TeacherRate, PayoutBatch, TeacherPayout, TeacherEarning
+from app.models.payout import TeacherRate
 from app.models.subscription import StudentSubscription, SubscriptionStatus
-from app.schemas.payout import (
-    TeacherRateSet, TeacherRateResponse,
-    TriggerPayoutRequest, PayoutBatchResponse,
-    MarkPayoutTransferredRequest,
-)
+from app.schemas.payout import TeacherRateSet, TeacherRateResponse
 from app.schemas.subscription import StudentSubscriptionResponse
-from app.services.payout_service import calculate_and_create_payout_batch
 
 router = APIRouter()
 
@@ -39,7 +32,7 @@ def set_teacher_rate(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Set or update a teacher's per-minute call rate."""
+    """Set or update a teacher's per-hour call rate."""
     teacher = db.query(User).filter(User.id == teacher_id, User.role == UserRole.TEACHER).first()
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
@@ -71,7 +64,7 @@ def list_teacher_rates(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """List all teachers with their current per-minute rate."""
+    """List all teachers with their current per-hour rate."""
     teachers = db.query(User).filter(User.role == UserRole.TEACHER).all()
     result = []
     for t in teachers:
@@ -83,74 +76,6 @@ def list_teacher_rates(
             "updated_at": rate.updated_at if rate else None,
         })
     return result
-
-
-# ── Payout Batches ────────────────────────────────────────────────
-
-@router.post("/payouts/trigger", response_model=PayoutBatchResponse)
-def trigger_payout(
-    payload: TriggerPayoutRequest,
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """
-    Trigger a payout batch for a period.
-    Atomically groups all pending teacher earnings and creates payout records.
-    """
-    batch = calculate_and_create_payout_batch(
-        period_from=payload.period_from,
-        period_to=payload.period_to,
-        admin_id=admin.id,
-        notes=payload.notes,
-        db=db,
-    )
-    return batch
-
-
-@router.get("/payouts", response_model=List[PayoutBatchResponse])
-def list_payout_batches(
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """List all payout batches (newest first)."""
-    return db.query(PayoutBatch).order_by(PayoutBatch.created_at.desc()).all()
-
-
-@router.get("/payouts/{batch_id}", response_model=PayoutBatchResponse)
-def get_payout_batch(
-    batch_id: int,
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Get detailed breakdown of a payout batch, including per-teacher amounts."""
-    batch = db.query(PayoutBatch).filter(PayoutBatch.id == batch_id).first()
-    if not batch:
-        raise HTTPException(status_code=404, detail="Payout batch not found")
-    return batch
-
-
-@router.patch("/payouts/{batch_id}/payouts/{payout_id}/mark-paid")
-def mark_payout_transferred(
-    batch_id: int,
-    payout_id: int,
-    payload: MarkPayoutTransferredRequest,
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin marks a teacher's payout as transferred (manual bank transfer)."""
-    payout = db.query(TeacherPayout).filter(
-        TeacherPayout.id == payout_id,
-        TeacherPayout.batch_id == batch_id,
-    ).first()
-    if not payout:
-        raise HTTPException(status_code=404, detail="Payout record not found")
-
-    payout.status = "transferred"
-    payout.transferred_at = datetime.now(timezone.utc)
-    if payload.notes:
-        payout.notes = payload.notes
-    db.commit()
-    return {"message": "Payout marked as transferred.", "payout_id": payout_id}
 
 
 # ── Subscription Management ───────────────────────────────────────
