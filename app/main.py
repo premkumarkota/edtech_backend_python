@@ -6,6 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.public_errors import public_server_error
 
@@ -132,6 +136,23 @@ UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 if not os.path.exists(UPLOADS_DIR):
     os.makedirs(UPLOADS_DIR, exist_ok=True)
 app.mount("/files", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError):
+    """
+    A database constraint blocked the change (e.g. deleting a row other rows
+    still reference). Answer 409 with a readable message instead of a 500.
+    Registered for this specific type, so it runs inside CORSMiddleware and
+    the browser sees the real response (the catch-all Exception handler runs
+    outside it, which the admin panel reports as "API unreachable").
+    """
+    logger.warning(f"IntegrityError on {request.method} {request.url.path}: {exc.orig}")
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "This change conflicts with other records that depend on it. "
+                           "Remove or move those first, then try again."},
+    )
 
 
 @app.exception_handler(Exception)

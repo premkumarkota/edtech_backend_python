@@ -6,6 +6,9 @@ from app.database import get_db
 from app.dependencies import get_current_admin
 from app.models.user import User
 from app.models.category import Category
+from app.models.quiz import Quiz
+from app.models.study_planner_v2 import GoalExam
+from app.models.syllabus import Syllabus
 from app.schemas.category import CategoryResponse
 from app.services.storage_service import upload_file, ALLOWED_IMAGE_TYPES
 
@@ -72,10 +75,33 @@ def delete_category(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin)
 ):
-    """Admin deletes a category"""
+    """
+    Admin deletes a category.
+
+    Refuses (409) while anything still uses it — users, syllabus subjects,
+    quizzes or study-goal exams all reference categories with NO ACTION
+    foreign keys, so a delete would fail in the database anyway. The message
+    tells the admin exactly what to move first.
+    """
     cat = db.query(Category).filter(Category.id == category_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="Category not found")
+
+    usage = [
+        (db.query(User).filter(User.category_id == category_id).count(), "user", "users"),
+        (db.query(Syllabus).filter(Syllabus.category_id == category_id).count(), "syllabus subject", "syllabus subjects"),
+        (db.query(Quiz).filter(Quiz.category_id == category_id).count(), "quiz", "quizzes"),
+        (db.query(GoalExam).filter(GoalExam.category_id == category_id).count(), "study-goal exam", "study-goal exams"),
+    ]
+    in_use = [f"{n} {one if n == 1 else many}" for n, one, many in usage if n]
+    if in_use:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't delete \"{cat.name}\" because it's still in use: "
+                f"{', '.join(in_use)}. Move them to another category first, then delete it."
+            ),
+        )
 
     db.delete(cat)
     db.commit()
