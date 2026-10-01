@@ -5,6 +5,9 @@ from typing import List
 from app.database import get_db
 from app.dependencies import get_current_admin
 from app.models.user import User, UserRole
+from app.models.category import Category
+from app.models.student_profile import StudentProfile
+from app.models.subscription import StudentSubscription, SubscriptionPlan
 from app.public_errors import public_server_error
 from app.schemas.admin import StudentListItem, TeacherListItem, UserStatsResponse
 import firebase_admin.auth as firebase_auth
@@ -18,11 +21,58 @@ def list_students(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin)
 ):
-    """List all students (for admin portal dashboard)"""
-    students = db.query(User).filter(
-        User.role == UserRole.STUDENT
-    ).order_by(User.created_at.desc()).all()
-    return students
+    """
+    List all students with what the admin needs at a glance: enrolled
+    category, profile details and current plan. Fixed number of queries
+    regardless of how many students there are.
+    """
+    rows = (
+        db.query(User, Category.name, StudentProfile)
+        .outerjoin(Category, Category.id == User.category_id)
+        .outerjoin(StudentProfile, StudentProfile.user_id == User.id)
+        .filter(User.role == UserRole.STUDENT)
+        .order_by(User.created_at.desc())
+        .all()
+    )
+
+    # Current plan per student: active subscription wins, else the latest one.
+    plan_by_student: dict = {}
+    subs = (
+        db.query(StudentSubscription, SubscriptionPlan.name)
+        .join(SubscriptionPlan, SubscriptionPlan.id == StudentSubscription.plan_id)
+        .order_by(StudentSubscription.created_at.desc())
+        .all()
+    )
+    for sub, plan_name in subs:
+        status = getattr(sub.status, "value", sub.status)
+        current = plan_by_student.get(sub.student_id)
+        if current is None or (status == "active" and current[1] != "active"):
+            plan_by_student[sub.student_id] = (plan_name, status, sub.expires_at)
+
+    result = []
+    for user, category_name, profile in rows:
+        plan = plan_by_student.get(user.id)
+        result.append({
+            "id": user.id,
+            "name": user.name,
+            "phone_number": user.phone_number,
+            "email": user.email,
+            "is_active": bool(user.is_active),
+            "onboarding_completed": bool(user.onboarding_completed),
+            "profile_image_url": user.profile_image_url,
+            "created_at": user.created_at,
+            "category_id": user.category_id,
+            "category_name": category_name,
+            "dob": profile.dob if profile else None,
+            "age": profile.age if profile else None,
+            "school_college": profile.school_college if profile else None,
+            "location": profile.location if profile else None,
+            "total_points": profile.total_points if profile else None,
+            "plan_name": plan[0] if plan else None,
+            "subscription_status": plan[1] if plan else None,
+            "subscription_expires_at": plan[2] if plan else None,
+        })
+    return result
 
 
 @router.get("/teachers", response_model=List[TeacherListItem])

@@ -76,6 +76,18 @@ class StudentListItem(BaseModel):
     onboarding_completed: bool
     profile_image_url: Optional[str] = None
     created_at: Optional[datetime] = None
+    # Enrolment + profile (all optional — older rows may not have them)
+    category_id: Optional[int] = None
+    category_name: Optional[str] = None
+    dob: Optional[str] = None
+    age: Optional[int] = None
+    school_college: Optional[str] = None
+    location: Optional[str] = None
+    total_points: Optional[int] = None
+    # Current plan: the active subscription, else the most recent one
+    plan_name: Optional[str] = None
+    subscription_status: Optional[str] = None
+    subscription_expires_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
