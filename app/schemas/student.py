@@ -25,6 +25,16 @@ class StudentOnboardingRequest(BaseModel):
     category_id: int
 
 
+class StudentProfileUpdateRequest(BaseModel):
+    """Edit profile — only the fields sent are changed. Phone number is the
+    login identity and can't be changed here."""
+    name: Optional[str] = None
+    email: Optional[str] = None
+    dob: Optional[str] = None            # YYYY-MM-DD; age is derived from it
+    school_college: Optional[str] = None
+    location: Optional[str] = None
+
+
 class StudentCategoryUpdateRequest(BaseModel):
     """Home category switcher — update the student's active learning board."""
     category_id: int

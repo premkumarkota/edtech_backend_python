@@ -127,3 +127,116 @@ def chapter_quiz_state(
         "quiz_passed": bool(prog and prog.quiz_passed),
         "best_percentage": (prog.quiz_best_percentage if prog else None),
     }
+
+
+def _chapter_status(read: bool, quiz, prog, attempts: int) -> str:
+    """not_started | quiz_pending | retake | completed"""
+    if not read and attempts == 0:
+        return "not_started"
+    if quiz is None:
+        return "completed" if read else "not_started"
+    if attempts == 0:
+        return "quiz_pending"
+    passed = bool(prog and prog.quiz_passed)
+    if quiz.require_pass and not passed:
+        return "retake"
+    return "completed"
+
+
+@router.get("/{syllabus_id}/progress")
+def syllabus_progress(
+    syllabus_id: int,
+    student: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Per-chapter completion for the chapter list: read state, chapter-quiz best
+    score, pass mark and whether the student must retake.
+    """
+    from sqlalchemy import func
+    from app.models.quiz import QuizAttempt, AttemptStatus
+
+    chapter_ids = [
+        cid for (cid,) in db.query(Chapter.id).filter(Chapter.syllabus_id == syllabus_id)
+    ]
+    if not chapter_ids:
+        return {"chapters": [], "completed_count": 0, "total_count": 0}
+
+    progress = {
+        p.chapter_id: p
+        for p in db.query(ChapterProgress).filter(
+            ChapterProgress.student_id == student.id,
+            ChapterProgress.chapter_id.in_(chapter_ids),
+        )
+    }
+
+    # Latest published chapter quiz per chapter.
+    quizzes = {}
+    for q in (
+        db.query(Quiz)
+        .filter(
+            Quiz.chapter_id.in_(chapter_ids),
+            Quiz.quiz_type == "chapter",
+            Quiz.status == QuizStatus.PUBLISHED,
+        )
+        .order_by(Quiz.created_at.asc())
+    ):
+        quizzes[q.chapter_id] = q
+
+    attempts = {}
+    last_pct = {}
+    if quizzes:
+        quiz_ids = [q.id for q in quizzes.values()]
+        rows = (
+            db.query(QuizAttempt.quiz_id, func.count(QuizAttempt.id))
+            .filter(
+                QuizAttempt.student_id == student.id,
+                QuizAttempt.quiz_id.in_(quiz_ids),
+                QuizAttempt.status == AttemptStatus.COMPLETED,
+            )
+            .group_by(QuizAttempt.quiz_id)
+        )
+        attempts = {qid: n for qid, n in rows}
+        for a in (
+            db.query(QuizAttempt)
+            .filter(
+                QuizAttempt.student_id == student.id,
+                QuizAttempt.quiz_id.in_(quiz_ids),
+                QuizAttempt.status == AttemptStatus.COMPLETED,
+            )
+            .order_by(QuizAttempt.completed_at.asc())
+        ):
+            last_pct[a.quiz_id] = a.percentage
+
+    chapters = []
+    completed = 0
+    for cid in chapter_ids:
+        prog = progress.get(cid)
+        quiz = quizzes.get(cid)
+        read = bool(prog and prog.content_read_at)
+        n = attempts.get(quiz.id, 0) if quiz else 0
+        state = _chapter_status(read, quiz, prog, n)
+        if state == "completed":
+            completed += 1
+        pass_pct = None
+        if quiz and quiz.total_marks:
+            pass_pct = round(quiz.pass_marks / quiz.total_marks * 100, 1)
+        chapters.append({
+            "chapter_id": cid,
+            "status": state,
+            "content_read": read,
+            "has_quiz": quiz is not None,
+            "quiz_id": quiz.id if quiz else None,
+            "quiz_attempts": n,
+            "best_percentage": prog.quiz_best_percentage if prog else None,
+            "last_percentage": last_pct.get(quiz.id) if quiz else None,
+            "pass_percentage": pass_pct,
+            "quiz_passed": bool(prog and prog.quiz_passed),
+            "require_pass": bool(quiz and quiz.require_pass),
+        })
+
+    return {
+        "chapters": chapters,
+        "completed_count": completed,
+        "total_count": len(chapter_ids),
+    }

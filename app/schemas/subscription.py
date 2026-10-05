@@ -67,6 +67,10 @@ class SubscriptionStatusResponse(BaseModel):
     video_call_minutes_total: Optional[int] = None
     video_call_minutes_used: Optional[int] = None
     video_call_minutes_remaining: Optional[int] = None
+    started_at: Optional[datetime] = None
+    carried_over_minutes: Optional[int] = None
+    can_repurchase: Optional[bool] = None
+    repurchase_threshold: Optional[int] = None
 
 
 # ── Payment Schemas ──────────────────────────────────────────────

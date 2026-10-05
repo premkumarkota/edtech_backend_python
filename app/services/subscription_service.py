@@ -206,6 +206,7 @@ def build_status_response(student_id: int, db: Session) -> dict:
         "has_active_subscription": True,
         "subscription_id": sub.id,
         "plan": plan,
+        "started_at": sub.started_at,
         "expires_at": sub.expires_at,
         "days_remaining": max(0, days_remaining),
         "mock_tests_allowed": None if sub.mock_tests_allowed == 0 else sub.mock_tests_allowed,

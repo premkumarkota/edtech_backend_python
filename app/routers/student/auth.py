@@ -8,6 +8,7 @@ from app.schemas.student import (
     StudentSyncRequest,
     StudentOnboardingRequest,
     StudentCategoryUpdateRequest,
+    StudentProfileUpdateRequest,
     StudentProfileResponse,
     StudentSyncResponse,
 )
@@ -195,6 +196,66 @@ def get_student_profile(
     Get current student's profile.
     Merges core User data with academic StudentProfile data.
     """
+    return _student_profile_dict(current_user, db)
+
+
+@router.patch("/profile", response_model=StudentProfileResponse)
+def update_student_profile(
+    request: StudentProfileUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_student),
+):
+    """Edit personal details from the Profile screen."""
+    from datetime import date
+    from app.models.student_profile import StudentProfile
+
+    data = request.model_dump(exclude_unset=True)
+
+    if "name" in data:
+        name = (data["name"] or "").strip()
+        if len(name) < 2:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please enter your full name")
+        current_user.name = name[:100]
+
+    if "email" in data:
+        email = (data["email"] or "").strip().lower() or None
+        if email:
+            if "@" not in email or "." not in email.split("@")[-1]:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please enter a valid email")
+            taken = db.query(User).filter(
+                User.email == email, User.id != current_user.id
+            ).first()
+            if taken:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email already in use")
+        current_user.email = email
+
+    profile = db.query(StudentProfile).filter(
+        StudentProfile.user_id == current_user.id
+    ).first()
+    if not profile:
+        profile = StudentProfile(user_id=current_user.id)
+        db.add(profile)
+
+    if "dob" in data and data["dob"]:
+        try:
+            dob = date.fromisoformat(data["dob"].strip())
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Date of birth must be YYYY-MM-DD")
+        today = date.today()
+        if dob >= today:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Date of birth must be in the past")
+        profile.dob = dob.isoformat()
+        profile.age = today.year - dob.year - (
+            (today.month, today.day) < (dob.month, dob.day)
+        )
+
+    if "school_college" in data:
+        profile.school_college = (data["school_college"] or "").strip() or None
+    if "location" in data:
+        profile.location = (data["location"] or "").strip() or None
+
+    db.commit()
+    db.refresh(current_user)
     return _student_profile_dict(current_user, db)
 
 
