@@ -506,7 +506,11 @@ def my_earnings(
     if payout_status:
         q = q.filter(TeacherEarning.payout_status == payout_status)
 
-    earnings = q.order_by(TeacherEarning.created_at.desc()).all()
+    earnings = (
+        q.options(joinedload(TeacherEarning.session).joinedload(VideoCallSession.student))
+        .order_by(TeacherEarning.created_at.desc())
+        .all()
+    )
 
     if month or payout_status:
         total_pending = sum(
@@ -525,5 +529,14 @@ def my_earnings(
         total_pending=total_pending,
         total_paid=total_paid,
         total_sessions=len(earnings),
-        earnings=earnings,
+        earnings=[_earning_item(e) for e in earnings],
     )
+
+
+def _earning_item(e: TeacherEarning) -> TeacherEarningItem:
+    item = TeacherEarningItem.model_validate(e)
+    sess = e.session
+    if sess is not None:
+        item.student_name = sess.student.name if sess.student else None
+        item.session_at = sess.started_at or sess.scheduled_at
+    return item

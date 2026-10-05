@@ -76,6 +76,8 @@ class TeacherEarningItem(BaseModel):
     gross_earning: Decimal
     payout_status: str
     created_at: datetime
+    student_name: Optional[str] = None
+    session_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
