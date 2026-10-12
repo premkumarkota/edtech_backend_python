@@ -160,10 +160,7 @@ def collect_study_units(
 
             # A chapter is "studyable" if it has uploaded lessons OR published AI
             # content OR a published chapter quiz.
-            has_ai_content = bool(
-                getattr(ch, "content_published", False)
-                and (ch.description or "").strip()
-            )
+            has_ai_content = bool((ch.live_description or "").strip())
             has_quiz = (
                 db.query(Quiz.id)
                 .filter(
@@ -191,7 +188,7 @@ def collect_study_units(
                 "adjusted_mins": adjusted_mins,
                 "content_ids": content_ids,
                 "content_items": content_items,
-                "description": ch.description or "",
+                "description": ch.live_description or "",
                 "has_materials": has_materials,
             })
 

@@ -61,6 +61,13 @@ class QuizResponse(BaseModel):
     created_by: Optional[int] = None
     question_count: int = 0
     created_at: datetime
+    # Mock-test entitlement for the requesting student (list endpoint only).
+    locked: bool = False
+    lock_reason: Optional[str] = None   # subscription_required | limit_reached
+    # Per-student context (list endpoint only).
+    chapter_title: Optional[str] = None
+    attempted: bool = False
+    best_percentage: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -175,6 +182,7 @@ class GlobalRankEntry(BaseModel):
     profile_image_url: Optional[str] = None
     total_points: int
     rank: int
+    is_me: bool = False
 
     class Config:
         from_attributes = True

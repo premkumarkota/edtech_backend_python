@@ -10,6 +10,9 @@ from app.models.syllabus import Syllabus, Chapter
 from app.models.quiz import Quiz, QuizStatus, ChapterProgress
 from app.schemas.syllabus import SyllabusSummary, SyllabusDetailStudent
 from app.services.syllabus_layout import syllabus_to_detail_with_layout
+from app.services.quiz_marks import (
+    effective_pass_marks, pass_percentage, chapter_quiz_passed,
+)
 
 router = APIRouter()
 
@@ -30,9 +33,14 @@ def get_my_syllabus(
         .order_by(Syllabus.created_at.desc())
         .all()
     )
-    # Add chapter count
+    # Chapter count + this student's completed chapters (drives the home
+    # "Continue learning" pick and per-subject progress).
     for s in results:
         s.chapter_count = db.query(Chapter).filter(Chapter.syllabus_id == s.id).count()
+        s.completed_chapters = (
+            syllabus_progress(s.id, student, db)["completed_count"]
+            if s.chapter_count else 0
+        )
     return results
 
 @router.get("/{syllabus_id}", response_model=SyllabusDetailStudent)
@@ -109,6 +117,12 @@ def chapter_quiz_state(
         .order_by(Quiz.created_at.desc())
         .first()
     )
+    # A chapter whose written material exists but isn't published yet must
+    # not expose its quiz on its own (students saw a quiz with no material).
+    content_pending = bool((ch.description or "").strip()) and not (ch.live_description or "").strip()
+    if content_pending:
+        quiz = None
+
     quiz_info = None
     if quiz:
         quiz_info = {
@@ -116,7 +130,7 @@ def chapter_quiz_state(
             "title": quiz.title,
             "question_count": len(quiz.questions),
             "total_marks": quiz.total_marks,
-            "pass_marks": quiz.pass_marks,
+            "pass_marks": effective_pass_marks(quiz),
             "require_pass": quiz.require_pass,
             "duration_mins": quiz.duration_mins,
         }
@@ -124,7 +138,8 @@ def chapter_quiz_state(
     return {
         "content_read": bool(prog and prog.content_read_at),
         "quiz": quiz_info,
-        "quiz_passed": bool(prog and prog.quiz_passed),
+        "content_pending": content_pending,
+        "quiz_passed": chapter_quiz_passed(quiz, prog) if quiz else bool(prog and prog.quiz_passed),
         "best_percentage": (prog.quiz_best_percentage if prog else None),
     }
 
@@ -137,7 +152,7 @@ def _chapter_status(read: bool, quiz, prog, attempts: int) -> str:
         return "completed" if read else "not_started"
     if attempts == 0:
         return "quiz_pending"
-    passed = bool(prog and prog.quiz_passed)
+    passed = chapter_quiz_passed(quiz, prog)
     if quiz.require_pass and not passed:
         return "retake"
     return "completed"
@@ -218,9 +233,7 @@ def syllabus_progress(
         state = _chapter_status(read, quiz, prog, n)
         if state == "completed":
             completed += 1
-        pass_pct = None
-        if quiz and quiz.total_marks:
-            pass_pct = round(quiz.pass_marks / quiz.total_marks * 100, 1)
+        pass_pct = pass_percentage(quiz) if quiz else None
         chapters.append({
             "chapter_id": cid,
             "status": state,
@@ -231,7 +244,7 @@ def syllabus_progress(
             "best_percentage": prog.quiz_best_percentage if prog else None,
             "last_percentage": last_pct.get(quiz.id) if quiz else None,
             "pass_percentage": pass_pct,
-            "quiz_passed": bool(prog and prog.quiz_passed),
+            "quiz_passed": chapter_quiz_passed(quiz, prog) if quiz else False,
             "require_pass": bool(quiz and quiz.require_pass),
         })
 

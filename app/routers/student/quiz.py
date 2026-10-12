@@ -8,6 +8,10 @@ from app.database import get_db
 from app.dependencies import require_student
 from app.models.user import User
 from app.models.quiz import Quiz, QuizQuestion, QuizAttempt, QuizAnswer, QuizStatus, AttemptStatus, ChapterProgress
+from app.services.quiz_marks import effective_pass_marks, chapter_quiz_passed
+from app.services.subscription_service import (
+    consume_mock_test, mock_test_access, MOCK_SUBSCRIPTION_REQUIRED,
+)
 from app.schemas.quiz import (
     QuizResponse, QuizQuestionResponse, QuizAttemptResponse,
     QuizSubmit, QuizResultResponse, LeaderboardEntry, GlobalRankEntry
@@ -23,28 +27,119 @@ def list_quizzes(
     student: User = Depends(require_student),
     db: Session = Depends(get_db)
 ):
-    """List all published quizzes for a category with optional Subject/Chapter filters."""
-    effective_category_id = category_id or student.category_id
-    if not effective_category_id:
-        raise HTTPException(status_code=400, detail="Complete onboarding first.")
+    """
+    List published quizzes.
 
-    query = db.query(Quiz).filter(
-        Quiz.category_id == effective_category_id,
-        Quiz.status == QuizStatus.PUBLISHED,
-        Quiz.quiz_type == "mock",   # chapter quizzes live inside the chapter, not here
-    )
-    
+    - No `syllabus_id` (Tests tab): mock tests of the category being browsed.
+    - With `syllabus_id` (subject "Practice"): everything for that subject —
+      its chapter quizzes (latest published per chapter) plus mock tests that
+      cover it (primary subject OR any of its chapters via mock_test_chapters).
+      The subject decides the category, so this works while browsing another
+      board.
+
+    Each item carries the caller's `attempted` / `best_percentage`, and mock
+    tests carry entitlement `locked` / `lock_reason`.
+    """
+    from app.models.syllabus import Syllabus, Chapter
+    from app.models.quiz import MockTestChapter
+
     if syllabus_id:
-        query = query.filter(Quiz.syllabus_id == syllabus_id)
-    if chapter_id:
-        query = query.filter(Quiz.chapter_id == chapter_id)
+        subject = db.query(Syllabus).filter(Syllabus.id == syllabus_id).first()
+        if not subject:
+            raise HTTPException(status_code=404, detail="Subject not found")
+        chapter_objs = db.query(Chapter).filter(
+            Chapter.syllabus_id == syllabus_id
+        ).all()
+        chapter_titles = {c.id: c.title for c in chapter_objs}
+        chapter_ids = list(chapter_titles)
+        # Chapters whose written material isn't live yet don't offer a quiz.
+        pending_ids = {
+            c.id for c in chapter_objs
+            if (c.description or "").strip() and not (c.live_description or "").strip()
+        }
+        if chapter_id:
+            chapter_ids = [c for c in chapter_ids if c == chapter_id]
 
-    quizzes = query.order_by(Quiz.created_at.desc()).all()
+        mock_q = db.query(Quiz).filter(
+            Quiz.status == QuizStatus.PUBLISHED,
+            Quiz.quiz_type == "mock",
+        )
+        covering = (
+            db.query(MockTestChapter.quiz_id)
+            .filter(MockTestChapter.chapter_id.in_(chapter_ids))
+            if chapter_ids else None
+        )
+        if chapter_id:
+            mocks = mock_q.filter(Quiz.id.in_(covering)).all() if covering is not None else []
+        elif covering is not None:
+            mocks = mock_q.filter(
+                (Quiz.syllabus_id == syllabus_id) | (Quiz.id.in_(covering))
+            ).all()
+        else:
+            mocks = mock_q.filter(Quiz.syllabus_id == syllabus_id).all()
+
+        chapter_quizzes = []
+        if chapter_ids:
+            latest = {}
+            for qz in (
+                db.query(Quiz)
+                .filter(
+                    Quiz.status == QuizStatus.PUBLISHED,
+                    Quiz.quiz_type == "chapter",
+                    Quiz.chapter_id.in_(chapter_ids),
+                )
+                .order_by(Quiz.created_at.asc())
+            ):
+                latest[qz.chapter_id] = qz  # keep newest per chapter
+            # Chapter order: follow the subject's chapter list.
+            chapter_quizzes = [latest[c] for c in chapter_ids
+                               if c in latest and c not in pending_ids]
+
+        quizzes = chapter_quizzes + sorted(
+            mocks, key=lambda q: q.created_at, reverse=True
+        )
+    else:
+        effective_category_id = category_id or student.category_id
+        if not effective_category_id:
+            raise HTTPException(status_code=400, detail="Complete onboarding first.")
+        query = db.query(Quiz).filter(
+            Quiz.category_id == effective_category_id,
+            Quiz.status == QuizStatus.PUBLISHED,
+            Quiz.quiz_type == "mock",   # chapter quizzes live inside the chapter
+        )
+        if chapter_id:
+            query = query.filter(Quiz.chapter_id == chapter_id)
+        quizzes = query.order_by(Quiz.created_at.desc()).all()
+        chapter_titles = {}
+
+    # Caller's attempt summary for all listed quizzes in one query.
+    quiz_ids = [q.id for q in quizzes]
+    best = {}
+    if quiz_ids:
+        for qid, pct in (
+            db.query(QuizAttempt.quiz_id, func.max(QuizAttempt.percentage))
+            .filter(
+                QuizAttempt.student_id == student.id,
+                QuizAttempt.quiz_id.in_(quiz_ids),
+                QuizAttempt.status == AttemptStatus.COMPLETED,
+            )
+            .group_by(QuizAttempt.quiz_id)
+        ):
+            best[qid] = pct
 
     results = []
     for quiz in quizzes:
         r = QuizResponse.from_orm(quiz)
         r.question_count = len(quiz.questions)
+        r.attempted = quiz.id in best
+        r.best_percentage = (round(best[quiz.id], 1)
+                             if best.get(quiz.id) is not None else None)
+        if quiz.quiz_type == "chapter":
+            r.chapter_title = chapter_titles.get(quiz.chapter_id)
+        if quiz.quiz_type == "mock":
+            access = mock_test_access(student.id, quiz.id, db)
+            r.locked = not access["allowed"]
+            r.lock_reason = access["reason"]
         results.append(r)
     return results
 
@@ -65,6 +160,23 @@ def get_quiz(quiz_id: int, student: User = Depends(require_student), db: Session
     ).first()
     if not quiz:
         raise HTTPException(status_code=404, detail="Quiz not found")
+
+    # Mock tests are a paid, metered entitlement — don't leak questions to
+    # students who can't start the test.
+    if quiz.quiz_type == "mock":
+        access = mock_test_access(student.id, quiz.id, db)
+        if not access["allowed"]:
+            in_progress = db.query(QuizAttempt.id).filter(
+                QuizAttempt.quiz_id == quiz.id,
+                QuizAttempt.student_id == student.id,
+                QuizAttempt.status == AttemptStatus.IN_PROGRESS,
+            ).first()
+            if not in_progress:
+                detail = (MOCK_SUBSCRIPTION_REQUIRED
+                          if access["reason"] == "subscription_required"
+                          else "You've used all mock tests in your plan. "
+                               "Subscribe again to unlock more mock tests.")
+                raise HTTPException(status_code=403, detail=detail)
 
     questions = [QuizQuestionResponse.from_orm(q) for q in quiz.questions]
     return {
@@ -91,6 +203,12 @@ def start_quiz(quiz_id: int, student: User = Depends(require_student), db: Sessi
         QuizAttempt.status == AttemptStatus.IN_PROGRESS
     ).first()
     if existing: return existing
+
+    # Mock tests: require an active plan and spend one credit per distinct
+    # test (retakes within the same subscription are free). Same transaction
+    # as the attempt insert, so a failed insert doesn't burn a credit.
+    if quiz.quiz_type == "mock":
+        consume_mock_test(student.id, quiz.id, db)
 
     attempt = QuizAttempt(
         quiz_id=quiz_id,
@@ -176,7 +294,7 @@ def submit_quiz(
     attempt.score = score
     attempt.total_marks = total
     attempt.percentage = (score / total * 100) if total > 0 else 0
-    attempt.passed = score >= quiz.pass_marks
+    attempt.passed = score >= effective_pass_marks(quiz, total)
     attempt.status = AttemptStatus.COMPLETED
     attempt.completed_at = datetime.now(timezone.utc)
     attempt.time_taken_secs = time_taken_secs
@@ -200,6 +318,8 @@ def submit_quiz(
             prog.quiz_best_percentage = pct
         if attempt.passed:
             prog.quiz_passed = True
+        elif chapter_quiz_passed(quiz, prog):
+            prog.quiz_passed = True  # e.g. legacy pass_marks > total
         must_retake = bool(quiz.require_pass and not prog.quiz_passed)
 
     db.commit()
@@ -246,31 +366,77 @@ def get_leaderboard(quiz_id: int, db: Session = Depends(get_db), student: User =
         ).label("rank")
     ).filter(QuizAttempt.quiz_id == quiz_id, QuizAttempt.status == AttemptStatus.COMPLETED).subquery()
 
+    quiz_total = db.query(Quiz.total_marks).filter(Quiz.id == quiz_id).scalar() or 0
     results = db.query(User, subq.c.score, subq.c.time_taken_secs).join(subq, User.id == subq.c.student_id).filter(subq.c.rank == 1).order_by(subq.c.score.desc(), subq.c.time_taken_secs.asc()).limit(50).all()
 
     return [LeaderboardEntry(
         user_id=u.id, name=u.name or "Student", profile_image_url=u.profile_image_url,
-        score=s, time_taken_secs=t, rank=i, percentage=(s/50*100) # Mock percentage calculation
+        score=s, time_taken_secs=t, rank=i,
+        percentage=(round(s / quiz_total * 100, 1) if quiz_total else 0)
     ) for i, (u, s, t) in enumerate(results, 1)]
 
 
 @router.get("/leaderboard/global", response_model=List[GlobalRankEntry])
-def get_global_rankings(db: Session = Depends(get_db), student: User = Depends(require_student)):
-    """Global top 50 ranking based on total points."""
-    from app.models.student_profile import StudentProfile
-    
-    # Efficiently fetch top 50 students with points > 0
-    rankings = db.query(User, StudentProfile.total_points)\
-        .join(StudentProfile, User.id == StudentProfile.user_id)\
-        .filter(StudentProfile.total_points > 0)\
-        .order_by(StudentProfile.total_points.desc())\
-        .limit(50)\
-        .all()
+def get_global_rankings(
+    category_id: Optional[int] = Query(None, description="Category being viewed; defaults to the student's own"),
+    db: Session = Depends(get_db),
+    student: User = Depends(require_student),
+):
+    """
+    Category leaderboard (top 50).
 
-    return [GlobalRankEntry(
-        user_id=u.id, 
-        name=u.name or "Student", 
-        profile_image_url=u.profile_image_url,
-        total_points=p, 
-        rank=i
-    ) for i, (u, p) in enumerate(rankings, 1)]
+    - Members: students whose category is `category_id` (default: the caller's).
+    - Points: sum of scores on completed attempts of quizzes in THAT category,
+      so points earned while browsing other boards don't leak into this ranking.
+    - Ties are ordered by name, then id, so the order is stable.
+    - The caller's own row is flagged `is_me`; if they're outside the top 50 it
+      is appended (with their real rank) so the app can show "Your position".
+    """
+    from app.models.user import UserRole
+
+    cat_id = category_id or student.category_id
+    if not cat_id:
+        return []
+
+    points = func.coalesce(func.sum(QuizAttempt.score), 0).label("points")
+    ranked = (
+        db.query(User.id.label("user_id"), points)
+        .join(QuizAttempt, QuizAttempt.student_id == User.id)
+        .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
+        .filter(
+            User.role == UserRole.STUDENT,
+            User.category_id == cat_id,
+            Quiz.category_id == cat_id,
+            QuizAttempt.status == AttemptStatus.COMPLETED,
+        )
+        .group_by(User.id)
+        .having(func.coalesce(func.sum(QuizAttempt.score), 0) > 0)
+        .subquery()
+    )
+    rows = (
+        db.query(User, ranked.c.points)
+        .join(ranked, ranked.c.user_id == User.id)
+        .order_by(ranked.c.points.desc(), User.name.asc(), User.id.asc())
+        .all()
+    )
+
+    entries = []
+    my_entry = None
+    for i, (u, p) in enumerate(rows, 1):
+        e = GlobalRankEntry(
+            user_id=u.id,
+            name=u.name or "Student",
+            profile_image_url=u.profile_image_url,
+            total_points=int(p or 0),
+            rank=i,
+            is_me=(u.id == student.id),
+        )
+        if e.is_me:
+            my_entry = e
+        if i <= 50:
+            entries.append(e)
+        elif my_entry is not None:
+            break
+    if my_entry is not None and my_entry.rank > 50:
+        entries.append(my_entry)
+    return entries

@@ -57,13 +57,14 @@ def create_subscription_order(
     # If minutes_remaining <= REPURCHASE_THRESHOLD_MINS they may buy a new plan;
     # remaining minutes will be carried forward on activation.
     existing = get_active_subscription(student.id, db)
-    if existing and not can_repurchase(existing):
+    if existing and not can_repurchase(existing, db):
         mins_left = existing.video_minutes_remaining
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"You still have {mins_left} minutes on your current plan. "
-                f"You can top up when you have {REPURCHASE_THRESHOLD_MINS} minutes or fewer remaining."
+                f"You still have {mins_left} minutes and mock tests left on your current plan. "
+                f"You can buy again when you have {REPURCHASE_THRESHOLD_MINS} minutes or fewer "
+                "remaining, or once your mock tests are used up."
             ),
         )
 

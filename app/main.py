@@ -81,12 +81,36 @@ _V2_CANONICAL = os.environ.get("STUDY_PLANNER_V2_CANONICAL", "1").strip().lower(
 )
 
 
+def _ensure_chapter_live_copy():
+    """
+    Idempotent schema patch for the chapter draft/live split (create_all
+    doesn't add columns to existing tables). Backfills the live copy for
+    chapters that were already published, so a later draft edit can't leak.
+    Mirrors alembic revision j4k5l6m7n8o9.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text as _sql
+    try:
+        with engine.begin() as conn:
+            conn.execute(_sql(
+                "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS published_description TEXT"
+            ))
+            conn.execute(_sql(
+                "UPDATE chapters SET published_description = description "
+                "WHERE content_published = true AND published_description IS NULL"
+            ))
+    except Exception as e:  # never block startup on this
+        print(f"WARNING: chapter live-copy patch failed: {e}")
+
+
 # ── Lifespan (startup / shutdown) ────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         Base.metadata.create_all(bind=engine)
         print("INFO: Database tables created/verified successfully.")
+        _ensure_chapter_live_copy()
     except Exception as e:
         print(f"WARNING: DB error on startup: {e}")
 

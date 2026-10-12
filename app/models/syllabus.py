@@ -42,10 +42,32 @@ class Chapter(Base):
     order_index = Column(Integer, default=0)
     difficulty  = Column(String(10), default="medium")  # easy | medium | hard
     estimated_minutes = Column(Integer, default=45)     # estimated study time
-    # Review gate for AI-generated content: students only see `description`
-    # when this is True. Generating/editing content sets it False (draft).
+    # Draft / live split:
+    #   description            — admin's working copy (draft, always editable)
+    #   published_description  — the live copy students read
+    #   content_published      — whether the chapter has live content at all
+    # Editing or AI-generating only changes the draft; students keep seeing
+    # the last published version until the admin clicks Publish.
     content_published = Column(Boolean, default=True, nullable=False,
                                server_default="true")
+    published_description = Column(Text, nullable=True)
+
+    @property
+    def live_description(self):
+        """What students see. Legacy rows (published before the draft/live
+        split) have no snapshot yet, so their description *is* the live copy."""
+        if not self.content_published:
+            return None
+        if self.published_description is None:
+            return self.description
+        return self.published_description
+
+    @property
+    def has_unpublished_changes(self) -> bool:
+        """Live chapter whose draft differs from what students currently see."""
+        if not self.content_published or self.published_description is None:
+            return False
+        return (self.description or "") != (self.published_description or "")
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

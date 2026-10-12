@@ -34,6 +34,7 @@ class ChapterResponse(ChapterBase):
     id: int
     syllabus_id: int
     content_published: bool = True
+    has_unpublished_changes: bool = False
     contents: List[SyllabusContentResponse] = []
     created_at: datetime
     class Config:
@@ -54,6 +55,8 @@ class SyllabusSummary(SyllabusBase):
     is_active: bool
     created_at: datetime
     chapter_count: int = 0
+    # Caller's progress (student list only): chapters with status "completed".
+    completed_chapters: int = 0
     class Config:
         from_attributes = True
 
@@ -71,6 +74,7 @@ class ChapterStudentResponse(ChapterBase):
     syllabus_id: int
     created_at: datetime
     content_published: bool = True
+    has_unpublished_changes: bool = False
     contents: List[SyllabusContentResponse] = []
     hero_video: Optional[SyllabusContentResponse] = None
     document_contents: List[SyllabusContentResponse] = []

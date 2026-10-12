@@ -34,7 +34,8 @@ def chapter_to_layout_response(
     published = getattr(ch, "content_published", True)
     # Students only receive the content when it's published. Admin views
     # (include_unpublished=True) always see it so they can review drafts.
-    description = ch.description if (include_unpublished or published) else None
+    # Admin gets the working draft; students get the last published copy.
+    description = ch.description if include_unpublished else ch.live_description
 
     return ChapterStudentResponse(
         id=ch.id,
@@ -42,6 +43,7 @@ def chapter_to_layout_response(
         title=ch.title,
         description=description,
         content_published=published,
+        has_unpublished_changes=bool(getattr(ch, "has_unpublished_changes", False)),
         order_index=ch.order_index or 0,
         created_at=ch.created_at,
         contents=[SyllabusContentResponse.model_validate(x) for x in items],

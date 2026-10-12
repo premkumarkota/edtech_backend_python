@@ -26,6 +26,7 @@ from app.services.excel_parser import parse_quiz_excel
 from app.services.ai_quiz_service import generate_quiz, refine_questions, AIQuizError
 from app.public_errors import http_from_ai_error, public_validation_error
 
+from app.services.quiz_marks import recalc_marks
 router = APIRouter()
 
 
@@ -185,7 +186,7 @@ def ai_refine_quiz(
     quiz.questions.clear()
     db.flush()
     db.add_all([QuizQuestion(quiz_id=quiz.id, **q) for q in questions_data])
-    quiz.total_marks = sum(q["marks"] for q in questions_data)
+    recalc_marks(quiz, sum(q["marks"] for q in questions_data))
     # Editing content sends the quiz back to DRAFT so it is re-reviewed before publish.
     quiz.status = QuizStatus.DRAFT
     db.commit()
@@ -271,7 +272,7 @@ async def upload_quiz_excel(
     db.add_all(questions)
 
     # Update quiz total_marks
-    quiz.total_marks = sum(q["marks"] for q in questions_data)
+    recalc_marks(quiz, sum(q["marks"] for q in questions_data))
     db.commit()
 
     return {
@@ -350,7 +351,7 @@ def update_question(
 
     quiz = db.query(Quiz).filter(Quiz.id == q.quiz_id).first()
     if quiz:
-        quiz.total_marks = sum(qq.marks for qq in quiz.questions)
+        recalc_marks(quiz, sum(qq.marks for qq in quiz.questions))
         db.commit()
     return {"status": "success", "question_id": question_id}
 
@@ -374,7 +375,7 @@ def delete_question(
 
     quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
     if quiz:
-        quiz.total_marks = sum(qq.marks for qq in quiz.questions)
+        recalc_marks(quiz, sum(qq.marks for qq in quiz.questions))
         db.commit()
     return {"status": "success"}
 

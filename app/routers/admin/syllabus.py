@@ -327,9 +327,11 @@ def update_chapter(
     if payload.title is not None:
         c.title = payload.title
     if payload.description is not None:
+        # Only the draft changes; the live copy students read is untouched
+        # until Publish (previously this hid the content from students).
+        if c.content_published and c.published_description is None:
+            c.published_description = c.description  # legacy row: freeze live copy
         c.description = payload.description
-        # Editing content sends it back to draft — must be re-published.
-        c.content_published = False
     db.commit()
     db.refresh(c)
     return c
@@ -347,6 +349,7 @@ def publish_chapter_content(
         raise HTTPException(status_code=404, detail="Chapter not found")
     if not (c.description or "").strip():
         raise HTTPException(status_code=400, detail="No content to publish")
+    c.published_description = c.description
     c.content_published = True
     db.commit()
     db.refresh(c)
@@ -540,8 +543,11 @@ def ai_generate_chapter_content(
     except AIContentError as e:
         raise http_from_ai_error(e)
 
+    # New AI content is a draft; any live version stays visible to students
+    # until the admin reviews and publishes.
+    if c.content_published and c.published_description is None:
+        c.published_description = c.description  # legacy row: freeze live copy
     c.description = content
-    c.content_published = False  # draft — admin must review & publish
     db.commit()
     db.refresh(c)
     return c

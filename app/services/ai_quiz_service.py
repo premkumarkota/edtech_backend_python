@@ -11,6 +11,7 @@ Config (app/config.py / .env.dev):
     ANTHROPIC_MODEL    — model id (default "claude-sonnet-5")
 """
 import logging
+import re
 from typing import List, Literal
 
 from pydantic import BaseModel
@@ -40,6 +41,51 @@ class GeneratedQuiz(BaseModel):
 
 class AIQuizError(Exception):
     """Raised when quiz generation fails (missing key, API error, empty result)."""
+
+
+_VALID_OPTIONS = {"A", "B", "C", "D"}
+
+
+def _norm_stem(text: str) -> str:
+    """Normalised question text for duplicate detection."""
+    return " ".join("".join(ch.lower() if ch.isalnum() else " " for ch in text).split())
+
+
+# Filler the model sometimes emits instead of real options when it "abbreviates".
+_FILLER = re.compile(
+    r"^(placeholder|option\s*[a-d1-4]?|tbd|todo|n/?a|none|lorem.*|\.{2,}|…|-+|\?+|xxx+)$",
+    re.IGNORECASE,
+)
+
+
+def _is_filler(text: str) -> bool:
+    return bool(_FILLER.match((text or "").strip()))
+
+
+def _clean_questions(questions: list[dict], seen: set[str] | None = None) -> list[dict]:
+    """
+    Drop malformed or duplicate questions (the AI occasionally emits blanks,
+    an invalid answer letter, or repeats). `seen` carries stems across batches.
+    """
+    seen = seen if seen is not None else set()
+    out = []
+    for q in questions:
+        stem = _norm_stem(q.get("question_text", ""))
+        opts = [q.get(f"option_{k}", "") for k in "abcd"]
+        if not stem or any(not o or _is_filler(o) for o in opts):
+            continue
+        if _is_filler(q.get("question_text", "")):
+            continue
+        # Four identical options = not a real question.
+        if len({o.strip().lower() for o in opts}) < 4:
+            continue
+        if q.get("correct_option") not in _VALID_OPTIONS:
+            continue
+        if stem in seen:
+            continue
+        seen.add(stem)
+        out.append(q)
+    return out
 
 
 # ── Prompt ─────────────────────────────────────────────────────────────────────
@@ -151,12 +197,12 @@ def generate_quiz(
 ) -> dict:
     """Generate a quiz from a topic string (legacy path)."""
     num_questions = max(1, min(int(num_questions), 30))
-    return _run_generation(
+    return _exact(num_questions, _run_generation(
         _build_prompt(category_name, (subject or "").strip(), topic, difficulty, num_questions),
         marks_per_question,
         f"{topic} - {difficulty.title()} Quiz",
         language=language,
-    )
+    ))
 
 
 def generate_from_content(
@@ -191,12 +237,22 @@ def generate_from_content(
         "- 'explanation' (1-2 sentences) references the relevant idea from the content.\n"
         f"- 'title' is a short quiz title for this chapter (e.g. '{chapter or 'Chapter'} Quiz')."
     )
-    return _run_generation(
+    return _exact(num_questions, _run_generation(
         prompt, marks_per_question, f"{chapter or 'Chapter'} Quiz", language=language
-    )
+    ))
 
 
 # ── Refine (edit an existing question set with an admin instruction) ───────────
+
+def _exact(n: int, result: dict) -> dict:
+    """Validate/de-dupe and cap to the requested count (AI may overshoot)."""
+    qs = _clean_questions(result["questions"])[:n]
+    if not qs:
+        raise AIQuizError("The AI returned no valid questions. Try again.")
+    for idx, q in enumerate(qs):
+        q["order_index"] = idx
+    return {**result, "questions": qs}
+
 
 def _format_existing_questions(questions: list[dict]) -> str:
     """Render the current questions into a readable block for the refine prompt."""
@@ -281,8 +337,69 @@ def refine_questions(
         (subject or "").strip(),
         (topic or "").strip(),
         is_mock,
+    ) + (
+        "\n\nIMPORTANT: Return the COMPLETE revised question set — every question "
+        "written out in full with all four real options. Never abbreviate, never "
+        "use filler like 'placeholder', and never drop questions unless the "
+        "instruction explicitly asks you to remove them."
     )
-    return _run_generation(prompt, marks_per_question, fallback_title, language=language)
+    result = _run_generation(prompt, marks_per_question, fallback_title, language=language)
+
+    raw = result["questions"]
+    clean = _clean_questions(raw)
+    if len(clean) < len(raw):
+        raise AIQuizError(
+            f"The AI returned {len(raw) - len(clean)} incomplete question(s) "
+            "(e.g. 'placeholder' options). Nothing was changed — please try again."
+        )
+    asked_to_shrink = re.search(
+        r"\b(remove|delete|drop|fewer|less|reduce|shorten|only\s+\d+|cut)\b",
+        instruction, re.IGNORECASE,
+    )
+    if not asked_to_shrink and len(clean) < max(1, len(existing_questions) // 2):
+        raise AIQuizError(
+            f"The AI returned only {len(clean)} of {len(existing_questions)} questions. "
+            "Nothing was changed — please try again."
+        )
+    for idx, q in enumerate(clean):
+        q["order_index"] = idx
+    return {**result, "questions": clean}
+
+
+# Mock tests are generated in batches: one huge call both overshoots/undershoots
+# the requested count and risks hitting the output-token cap (esp. Telugu).
+_MOCK_BATCH_SIZE = 20
+_MOCK_TOPUP_ROUNDS = 3
+
+
+def _mock_prompt(subject: str, scope_label: str, outlines: list[dict], n: int,
+                 diff: str, part: str = "", avoid: list[str] | None = None) -> str:
+    blocks = []
+    for i, ch in enumerate(outlines, start=1):
+        t = (ch.get("title") or f"Chapter {i}").strip()
+        body = (ch.get("content") or "").strip()
+        blocks.append(f"### Chapter {i}: {t}\n{body if body else '(no content provided)'}")
+    material = "\n\n".join(blocks)
+    avoid_block = ""
+    if avoid:
+        listed = "\n".join(f"- {a[:160]}" for a in avoid[-120:])
+        avoid_block = (
+            "\nThese questions ALREADY EXIST in the test — do NOT repeat or rephrase them; "
+            f"cover different facts/concepts:\n{listed}\n"
+        )
+    return (
+        f"Create questions for a MOCK TEST for {subject or 'the subject'} covering {scope_label}."
+        f"{(' ' + part) if part else ''}\n\n"
+        f"Source material (the chapters to cover):\n\n{material}\n"
+        f"{avoid_block}\n"
+        f"Write EXACTLY {n} multiple-choice questions ({diff}) — not more, not fewer.\n"
+        "- Distribute questions as evenly as reasonable ACROSS all the chapters above.\n"
+        "- Base questions on the provided material; keep them exam-appropriate.\n"
+        "- Each question has 4 options (A-D) with exactly one correct answer.\n"
+        "- 'correct_option' is A, B, C, or D. Vary the correct option across questions.\n"
+        "- 'explanation' is 1-2 sentences.\n"
+        f"- 'title' is a short exam title (e.g. '{subject} — {scope_label}')."
+    )
 
 
 def generate_mock_test(
@@ -295,34 +412,90 @@ def generate_mock_test(
     language: str = "english",
 ) -> dict:
     """
-    Generate a MOCK TEST spanning multiple chapters.
+    Generate a MOCK TEST spanning multiple chapters with EXACTLY
+    `num_questions` valid, de-duplicated questions.
 
-    chapter_outlines: [{"title": str, "content": str}] — content may be full or
-    a trimmed outline for large scopes.
+    1. Split into batches of ≤ _MOCK_BATCH_SIZE, run in parallel; each batch
+       gets its own round-robin slice of chapters (when there are enough) so
+       batches cover different material and rarely collide.
+    2. Validate + de-duplicate across batches; trim each batch to its quota.
+    3. Top up any shortfall with sequential calls that list existing questions
+       to avoid, then trim the final set to the exact count.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     if not chapter_outlines:
         raise AIQuizError("Select at least one chapter for the mock test.")
-    num_questions = max(1, min(int(num_questions), 60))
+    target = max(1, min(int(num_questions), 60))
     diff = _difficulty_phrase(difficulty)
+    fallback_title = f"{subject} — {scope_label}"
 
-    blocks = []
-    for i, ch in enumerate(chapter_outlines, start=1):
-        t = (ch.get("title") or f"Chapter {i}").strip()
-        body = (ch.get("content") or "").strip()
-        blocks.append(f"### Chapter {i}: {t}\n{body if body else '(no content provided)'}")
-    material = "\n\n".join(blocks)
+    n_batches = -(-target // _MOCK_BATCH_SIZE)  # ceil
+    quotas = [target // n_batches + (1 if i < target % n_batches else 0)
+              for i in range(n_batches)]
 
-    prompt = (
-        f"Create a MOCK TEST for {subject or 'the subject'} covering {scope_label}.\n\n"
-        f"Source material (the chapters to cover):\n\n{material}\n\n"
-        f"Write exactly {num_questions} multiple-choice questions ({diff}).\n"
-        "- Distribute questions as evenly as reasonable ACROSS all the chapters above.\n"
-        "- Base questions on the provided material; keep them exam-appropriate.\n"
-        "- Each question has 4 options (A-D) with exactly one correct answer.\n"
-        "- 'correct_option' is A, B, C, or D. Vary the correct option across questions.\n"
-        "- 'explanation' is 1-2 sentences.\n"
-        f"- 'title' is a short exam title (e.g. '{subject} — {scope_label}')."
-    )
-    return _run_generation(
-        prompt, marks_per_question, f"{subject} — {scope_label}", language=language
-    )
+    def slice_for(i: int) -> list[dict]:
+        if len(chapter_outlines) >= n_batches > 1:
+            return chapter_outlines[i::n_batches]
+        return chapter_outlines
+
+    def run_batch(i: int) -> dict:
+        part = (f"This is part {i + 1} of {n_batches} of the test; focus on different "
+                "concepts than the other parts.") if n_batches > 1 and \
+            len(chapter_outlines) < n_batches else ""
+        return _run_generation(
+            _mock_prompt(subject, scope_label, slice_for(i), quotas[i], diff, part),
+            marks_per_question, fallback_title, language=language,
+        )
+
+    seen: set[str] = set()
+    questions: list[dict] = []
+    title = fallback_title
+    errors: list[Exception] = []
+    with ThreadPoolExecutor(max_workers=min(n_batches, 4)) as pool:
+        results = list(pool.map(lambda i: _safe(run_batch, i, errors), range(n_batches)))
+    for i, res in enumerate(results):
+        if not res:
+            continue
+        if i == 0 and res.get("title"):
+            title = res["title"]
+        # Trim each batch to its quota so one over-eager batch can't crowd out
+        # chapter coverage from the others.
+        questions.extend(_clean_questions(res["questions"], seen)[: quotas[i]])
+
+    for _ in range(_MOCK_TOPUP_ROUNDS):
+        missing = target - len(questions)
+        if missing <= 0:
+            break
+        try:
+            res = _run_generation(
+                _mock_prompt(subject, scope_label, chapter_outlines, missing, diff,
+                             avoid=[q["question_text"] for q in questions]),
+                marks_per_question, fallback_title, language=language,
+            )
+        except AIQuizError as e:
+            errors.append(e)
+            continue
+        questions.extend(_clean_questions(res["questions"], seen)[:missing])
+
+    if not questions:
+        raise errors[0] if errors else AIQuizError("The AI returned no questions. Try again.")
+    if len(questions) < target:
+        logger.warning(f"Mock test generation short: {len(questions)}/{target}")
+        raise AIQuizError(
+            f"The AI could only produce {len(questions)} of {target} questions. "
+            "Please try again, or reduce the number of questions."
+        )
+
+    questions = questions[:target]
+    for idx, q in enumerate(questions):
+        q["order_index"] = idx
+    return {"title": title, "questions": questions}
+
+
+def _safe(fn, arg, errors: list):
+    try:
+        return fn(arg)
+    except AIQuizError as e:
+        errors.append(e)
+        return None

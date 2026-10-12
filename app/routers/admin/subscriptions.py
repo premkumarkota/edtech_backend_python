@@ -13,10 +13,11 @@ from app.dependencies import require_admin
 from app.models.user import User
 from app.models.subscription import StudentSubscription, SubscriptionPlan, SubscriptionStatus
 
+from app.services.subscription_service import mock_tests_used_in
 router = APIRouter()
 
 
-def _serialize(sub: StudentSubscription) -> dict:
+def _serialize(sub: StudentSubscription, db: Session = None) -> dict:
     student_name = None
     student_email = None
     if sub.student:
@@ -37,7 +38,9 @@ def _serialize(sub: StudentSubscription) -> dict:
         "started_at": sub.started_at.isoformat() if sub.started_at else None,
         "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
         "mock_tests_allowed": sub.mock_tests_allowed,
-        "mock_tests_used": sub.mock_tests_used,
+        "mock_tests_used": (
+            mock_tests_used_in(sub, db) if db is not None else sub.mock_tests_used
+        ),
         "video_call_minutes_total": sub.video_call_minutes_total,
         "video_call_minutes_used": sub.video_call_minutes_used,
         "razorpay_order_id": sub.razorpay_order_id,
@@ -61,7 +64,7 @@ def list_subscriptions(
         q = q.filter(StudentSubscription.status == status)
 
     subs = q.order_by(StudentSubscription.created_at.desc()).all()
-    return [_serialize(s) for s in subs]
+    return [_serialize(s, db) for s in subs]
 
 
 @router.patch("/{sub_id}/cancel")

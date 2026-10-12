@@ -57,8 +57,13 @@ def update_plan(
 ):
     """
     Update a subscription plan.
-    NOTE: Changes do NOT affect existing active subscriptions
-    (entitlements are snapshotted at purchase time).
+
+    Entitlement policy on edit:
+      - mock_tests_allowed → applied to ACTIVE subscriptions of this plan too,
+        so an admin cap change takes effect immediately. Tests already taken
+        stay counted (remaining = max(0, allowed - used)).
+      - price / validity / video minutes → new purchases only (snapshotted
+        at purchase; changing them retroactively would alter what was paid for).
     """
     plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == plan_id).first()
     if not plan:
@@ -67,6 +72,22 @@ def update_plan(
     update_data = payload.dict(exclude_unset=True)
     for field, value in update_data.items():
         setattr(plan, field, value)
+
+    if "mock_tests_allowed" in update_data:
+        from datetime import datetime, timezone
+        from app.models.subscription import StudentSubscription, SubscriptionStatus
+        (
+            db.query(StudentSubscription)
+            .filter(
+                StudentSubscription.plan_id == plan.id,
+                StudentSubscription.status == SubscriptionStatus.ACTIVE.value,
+                StudentSubscription.expires_at > datetime.now(timezone.utc),
+            )
+            .update(
+                {StudentSubscription.mock_tests_allowed: plan.mock_tests_allowed},
+                synchronize_session=False,
+            )
+        )
 
     db.commit()
     db.refresh(plan)
