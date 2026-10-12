@@ -78,6 +78,7 @@ async def upload_file(
             ".avi": "video/x-msvideo", ".mkv": "video/x-matroska",
             ".webm": "video/webm", ".pdf": "application/pdf",
             ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".webp": "image/webp",
             ".doc": "application/msword",
             ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             ".ppt": "application/vnd.ms-powerpoint",

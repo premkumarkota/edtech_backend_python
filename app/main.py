@@ -41,6 +41,7 @@ from app.routers.admin import plans as admin_plans
 from app.routers.admin import subscriptions as admin_subscriptions
 from app.routers.admin import payouts as admin_payouts
 from app.routers.admin import config as admin_config
+from app.routers.admin import content_levels as admin_content_levels
 from app.routers.admin import stats as admin_stats
 from app.routers.admin import sessions as admin_sessions
 from app.routers.admin import withdrawals as admin_withdrawals
@@ -216,6 +217,9 @@ app.include_router(admin_payouts.router,
 app.include_router(admin_config.router,
                    prefix="/api/admin/config",
                    tags=["Admin - Platform Config"])
+app.include_router(admin_content_levels.router,
+                   prefix="/api/admin/content-levels",
+                   tags=["Admin - Content Levels"])
 
 app.include_router(admin_stats.router,
                    prefix="/api/admin/stats",

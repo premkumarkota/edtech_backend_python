@@ -34,6 +34,7 @@ from app.models.ai_study_planner import (                      # Depends on User
     AiStudentPreference, AiChatMessage, AiStudyPlan, ChatRole
 )
 from app.models.notification import Notification                  # Depends on User
+from app.models.content_level import ContentLevel                # No dependencies
 from app.models.study_planner_v2 import (                      # Depends on User, Category, Syllabus, Chapter
     GoalExam, GoalExamSubject,
     StudyGoal, StudyGoalSubject, StudyTimeSlot,
@@ -47,6 +48,7 @@ __all__ = [
     "Category",
     "User", "UserRole",
     "PlatformConfig",
+    "ContentLevel",
     "StudentProfile",
     "TeacherProfile", "TeacherStatus",
     "Syllabus",

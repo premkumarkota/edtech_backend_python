@@ -80,7 +80,12 @@ def _build_refine_prompt(
         f'Revise the content according to this instruction:\n"{instruction}"\n\n'
         "Apply the requested change while keeping the rest coherent and intact. Follow ALL the "
         "same formatting rules (headings/sub-headings, plain-text equations, and at least one "
-        "mandatory ASCII flowchart in a fenced code block). Output ONLY the full revised Markdown."
+        "mandatory ASCII flowchart in a fenced code block). "
+        "The content may contain admin-uploaded photos as Markdown image lines like "
+        "![caption](https://...). Keep EVERY such image line exactly as written (same URL, "
+        "same caption) and in the same position relative to the surrounding text, unless "
+        "the instruction explicitly asks to remove or move it. Never invent image URLs. "
+        "Output ONLY the full revised Markdown."
     )
 
 

@@ -501,7 +501,9 @@ def ai_generate_chapter_content(
     topic = (payload.topic or "").strip()
     instruction = (payload.instruction or "").strip()
     current = (c.description or "").strip()
-    level = (payload.level or "General").strip()
+    # Admin-managed level: send its AI guidance along with the name.
+    from app.routers.admin.content_levels import level_prompt_text
+    level = level_prompt_text(db, payload.level)
 
     # Refine existing content when an instruction is given and content exists;
     # otherwise generate fresh content (which needs a topic).
@@ -545,6 +547,30 @@ def ai_generate_chapter_content(
     return c
 
 # --- Content ---
+@router.post("/chapters/{chapter_id}/content-image")
+async def upload_chapter_content_image(
+    chapter_id: int,
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload a photo to embed inside the chapter's study content (Markdown).
+    Returns its public URL; the admin editor inserts `![caption](url)` at the
+    cursor. Nothing is attached to the chapter until the content is saved.
+    """
+    c = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    url = await upload_file(
+        file,
+        folder=f"syllabus/{c.syllabus_id}/chapters/{chapter_id}/images",
+        allowed_types=ALLOWED_IMAGE_TYPES,
+        max_size_mb=5,
+    )
+    return {"url": url}
+
+
 @router.post("/chapters/{chapter_id}/content", response_model=SyllabusContentResponse)
 async def create_content(
     chapter_id: int,
