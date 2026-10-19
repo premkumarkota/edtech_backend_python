@@ -68,6 +68,8 @@ def list_students(
             "school_college": profile.school_college if profile else None,
             "location": profile.location if profile else None,
             "total_points": profile.total_points if profile else None,
+            "terms_accepted_at": profile.terms_accepted_at if profile else None,
+            "guardian_consent_at": profile.guardian_consent_at if profile else None,
             "plan_name": plan[0] if plan else None,
             "subscription_status": plan[1] if plan else None,
             "subscription_expires_at": plan[2] if plan else None,

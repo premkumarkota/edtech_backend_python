@@ -84,6 +84,8 @@ class StudentListItem(BaseModel):
     school_college: Optional[str] = None
     location: Optional[str] = None
     total_points: Optional[int] = None
+    terms_accepted_at: Optional[datetime] = None
+    guardian_consent_at: Optional[datetime] = None
     # Current plan: the active subscription, else the most recent one
     plan_name: Optional[str] = None
     subscription_status: Optional[str] = None

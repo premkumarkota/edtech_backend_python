@@ -20,6 +20,12 @@ class StudentProfile(Base):
     location       = Column(String(200), nullable=True)
     total_points   = Column(Integer, default=0)
 
+    # Onboarding consent (static screens in the student app). Timestamps are
+    # set by the server when the student ticks the box; null = not given.
+    terms_accepted_at   = Column(DateTime(timezone=True), nullable=True)
+    guardian_consent_at = Column(DateTime(timezone=True), nullable=True)  # under-18 only
+    consent_version     = Column(String(20), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

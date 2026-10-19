@@ -23,6 +23,10 @@ class StudentOnboardingRequest(BaseModel):
     school_college: str
     location: str
     category_id: int
+    # Consent checkboxes from onboarding (older app builds don't send these)
+    terms_accepted: bool = False
+    guardian_consent: bool = False
+    consent_version: Optional[str] = None
 
 
 class StudentProfileUpdateRequest(BaseModel):
@@ -60,6 +64,9 @@ class StudentProfileResponse(BaseModel):
     age: Optional[int] = None
     school_college: Optional[str] = None
     location: Optional[str] = None
+    terms_accepted_at: Optional[datetime] = None
+    guardian_consent_at: Optional[datetime] = None
+    consent_version: Optional[str] = None
 
     created_at: Optional[datetime] = None
 

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_student
@@ -151,6 +152,15 @@ def complete_student_onboarding(
     profile.school_college = request.school_college
     profile.location = request.location
 
+    # Record consent once; re-sending onboarding never moves the original time.
+    now = datetime.now(timezone.utc)
+    if request.terms_accepted and not profile.terms_accepted_at:
+        profile.terms_accepted_at = now
+    if request.guardian_consent and not profile.guardian_consent_at:
+        profile.guardian_consent_at = now
+    if (request.terms_accepted or request.guardian_consent) and request.consent_version:
+        profile.consent_version = request.consent_version[:20]
+
     db.commit()
     db.refresh(current_user)
 
@@ -163,6 +173,9 @@ def complete_student_onboarding(
         "age": profile.age,
         "school_college": profile.school_college,
         "location": profile.location,
+        "terms_accepted_at": profile.terms_accepted_at,
+        "guardian_consent_at": profile.guardian_consent_at,
+        "consent_version": profile.consent_version,
         "category_name": category_name,
     }
 
@@ -183,6 +196,9 @@ def _student_profile_dict(user: User, db: Session) -> dict:
         "age": profile.age if profile else None,
         "school_college": profile.school_college if profile else None,
         "location": profile.location if profile else None,
+        "terms_accepted_at": profile.terms_accepted_at if profile else None,
+        "guardian_consent_at": profile.guardian_consent_at if profile else None,
+        "consent_version": profile.consent_version if profile else None,
         "category_name": category.name if category else None,
     }
 

@@ -32,6 +32,7 @@ from app.models import (  # noqa: F401
 from app.routers.admin import auth as admin_auth
 from app.routers.admin import users as admin_users
 from app.routers.admin import categories as admin_categories
+from app.routers.admin import exam_categories as admin_exam_categories
 from app.routers.admin import teachers as admin_teachers
 from app.routers.admin import syllabus as admin_syllabus
 from app.routers.admin import quiz as admin_quiz
@@ -104,6 +105,60 @@ def _ensure_chapter_live_copy():
         print(f"WARNING: chapter live-copy patch failed: {e}")
 
 
+def _ensure_student_consent_columns():
+    """
+    Idempotent patch for onboarding consent timestamps on student_profiles.
+    Mirrors alembic revision l6m7n8o9p0q1.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text as _sql
+    try:
+        with engine.begin() as conn:
+            for col, typ in (("terms_accepted_at", "TIMESTAMPTZ"),
+                             ("guardian_consent_at", "TIMESTAMPTZ"),
+                             ("consent_version", "VARCHAR(20)")):
+                conn.execute(_sql(
+                    f"ALTER TABLE student_profiles ADD COLUMN IF NOT EXISTS {col} {typ}"
+                ))
+    except Exception as e:  # never block startup on this
+        print(f"WARNING: student consent patch failed: {e}")
+
+
+_DEFAULT_EXAM_CATEGORIES = ("Entrance Exams", "Competitive Exams", "Academic Exams")
+
+
+def _ensure_exam_categories():
+    """
+    Idempotent schema patch for board categories: adds
+    categories.exam_category_id (create_all made exam_categories already) and
+    seeds the three default categories the first time. Mirrors alembic
+    revision k5l6m7n8o9p0.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text as _sql
+    try:
+        with engine.begin() as conn:
+            conn.execute(_sql(
+                "ALTER TABLE categories ADD COLUMN IF NOT EXISTS exam_category_id INTEGER "
+                "REFERENCES exam_categories(id) ON DELETE SET NULL"
+            ))
+            conn.execute(_sql(
+                "CREATE INDEX IF NOT EXISTS ix_categories_exam_category_id "
+                "ON categories (exam_category_id)"
+            ))
+            empty = conn.execute(_sql("SELECT COUNT(*) FROM exam_categories")).scalar() == 0
+            if empty:
+                for i, name in enumerate(_DEFAULT_EXAM_CATEGORIES, start=1):
+                    conn.execute(_sql(
+                        "INSERT INTO exam_categories (name, order_index, is_active) "
+                        "VALUES (:n, :o, true) ON CONFLICT (name) DO NOTHING"
+                    ), {"n": name, "o": i})
+    except Exception as e:  # never block startup on this
+        print(f"WARNING: exam-categories patch failed: {e}")
+
+
 # ── Lifespan (startup / shutdown) ────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -111,6 +166,8 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
         print("INFO: Database tables created/verified successfully.")
         _ensure_chapter_live_copy()
+        _ensure_exam_categories()
+        _ensure_student_consent_columns()
     except Exception as e:
         print(f"WARNING: DB error on startup: {e}")
 
@@ -205,7 +262,11 @@ app.include_router(admin_users.router,
 
 app.include_router(admin_categories.router,
                    prefix="/api/admin/categories",
-                   tags=["Admin - Categories"])
+                   tags=["Admin - Boards"])
+
+app.include_router(admin_exam_categories.router,
+                   prefix="/api/admin/exam-categories",
+                   tags=["Admin - Board Categories"])
 
 app.include_router(admin_teachers.router,
                    prefix="/api/admin/teachers",

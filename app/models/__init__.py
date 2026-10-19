@@ -1,7 +1,8 @@
 # Import order matters for SQLAlchemy FK resolution.
 # Always import referenced tables BEFORE tables that reference them.
 
-from app.models.category import Category                              # No dependencies
+from app.models.exam_category import ExamCategory                     # No dependencies
+from app.models.category import Category                              # Depends on ExamCategory
 from app.models.user import User, UserRole                            # Depends on Category
 from app.models.platform_config import PlatformConfig                 # Depends on User (updated_by FK)
 from app.models.student_profile import StudentProfile                 # Depends on User
@@ -45,6 +46,7 @@ from app.models.study_planner_v2 import (                      # Depends on User
 
 __all__ = [
     # Core
+    "ExamCategory",
     "Category",
     "User", "UserRole",
     "PlatformConfig",
