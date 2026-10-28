@@ -17,8 +17,35 @@ from app.models.study_planner_v2 import (
     StudyCalendarEntry, StudyMcqBank, StudyMcqAttempt,
 )
 from app.services.ai_llm_service import chat_completion_json
+from app.services.ai_language import ENGLISH, TELUGU, language_directive
 
 logger = logging.getLogger(__name__)
+
+# Telugu script tokenizes ~3-4x heavier than English, so 10 Telugu MCQs with
+# explanations overflow a 3000-token budget and come back as truncated JSON.
+_MCQ_MAX_TOKENS = {ENGLISH: 4000, TELUGU: 12000}
+
+
+def _contains_telugu(*texts: Optional[str]) -> bool:
+    """True if any text contains Telugu script (U+0C00–U+0C7F)."""
+    return any(
+        "ఀ" <= ch <= "౿"
+        for text in texts if text
+        for ch in text
+    )
+
+
+def _valid_questions(result: Optional[dict]) -> Optional[list[dict]]:
+    """Return the usable questions from an LLM result, or None if too few."""
+    if not result or not isinstance(result.get("questions"), list):
+        return None
+    questions = [
+        q for q in result["questions"]
+        if isinstance(q, dict) and q.get("question")
+        and isinstance(q.get("options"), list) and len(q["options"]) >= 2
+        and q.get("correct")
+    ]
+    return questions if len(questions) >= 5 else None
 
 _MCQ_SYSTEM_PROMPT = """Generate exactly 10 multiple-choice questions for the given topic.
 
@@ -56,7 +83,8 @@ def _try_quiz_bank_fallback(chapter_id: int, db: Session) -> Optional[list[dict]
     questions = (
         db.query(QuizQuestion)
         .join(Quiz, Quiz.id == QuizQuestion.quiz_id)
-        .filter(Quiz.chapter_id == chapter_id, Quiz.status == "published")
+        .filter(Quiz.chapter_id == chapter_id, Quiz.status == "published",
+                QuizQuestion.attempt_id.is_(None))
         .limit(10)
         .all()
     )
@@ -141,17 +169,27 @@ def get_or_generate_mcq(
                 topic_context = f"Subject: {entry.subject_name}\nTopic: {topic_context}"
             scope_instruction = "Generate 10 MCQ questions for:\n"
 
+        # Quiz language follows the chapter content: Telugu chapters (generated
+        # via the admin language selector) get Telugu MCQs.
+        language = TELUGU if _contains_telugu(
+            entry.subtopic_title, entry.topic_title, entry.chapter_name,
+            chapter.description if chapter else None,
+        ) else ENGLISH
+
         messages = [
-            {"role": "system", "content": _MCQ_SYSTEM_PROMPT},
+            {"role": "system", "content": _MCQ_SYSTEM_PROMPT + language_directive(language)},
             {"role": "user", "content": f"{scope_instruction}{topic_context}"},
         ]
 
-        result = chat_completion_json(messages=messages, temperature=0.5, max_tokens=3000)
+        fallback_questions = _valid_questions(chat_completion_json(
+            messages=messages, temperature=0.5, max_tokens=_MCQ_MAX_TOKENS[language],
+        ))
 
-        if result and "questions" in result:
-            fallback_questions = result["questions"]
-        else:
-            logger.error("LLM MCQ generation failed for topic: %s", entry.topic_title)
+        if not fallback_questions:
+            logger.error(
+                "LLM MCQ generation failed for topic: %s (language=%s)",
+                entry.topic_title, language,
+            )
             return None, "llm_unavailable"
 
     # Save to cache

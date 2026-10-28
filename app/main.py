@@ -71,6 +71,8 @@ from app.routers.student import ai_planner as student_ai_planner
 from app.routers.student import study_planner as student_study_planner
 from app.routers.student import notifications as student_notifications
 from app.routers.admin import exams as admin_exams
+from app.routers.admin import streaks as admin_streaks
+from app.routers.student import streak as student_streak
 from app.services.reminder_scheduler import start_scheduler, stop_scheduler
 from app.services.ai_plan_scheduler import start_ai_plan_scheduler, stop_ai_plan_scheduler
 from app.services.study_reschedule_service import start_study_planner_scheduler, stop_study_planner_scheduler
@@ -125,6 +127,54 @@ def _ensure_student_consent_columns():
         print(f"WARNING: student consent patch failed: {e}")
 
 
+def _ensure_streak_columns():
+    """
+    Idempotent patch for learning streaks: new study_streaks columns
+    (create_all already makes student_learning_days). Mirrors alembic n8o9p0q1r2s3.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text as _sql
+    try:
+        with engine.begin() as conn:
+            for col, typ in (("freezes", "INTEGER NOT NULL DEFAULT 0"),
+                             ("broken_streak", "INTEGER NOT NULL DEFAULT 0"),
+                             ("broken_on", "DATE"),
+                             ("repair_used_on", "DATE"),
+                             ("last_reminder_on", "DATE")):
+                conn.execute(_sql(
+                    f"ALTER TABLE study_streaks ADD COLUMN IF NOT EXISTS {col} {typ}"
+                ))
+    except Exception as e:  # never block startup on this
+        print(f"WARNING: streak patch failed: {e}")
+
+
+def _ensure_quiz_retake_columns():
+    """
+    Idempotent patch for fresh retake questions: quiz_questions.attempt_id
+    (owner attempt of an AI retake question) + quiz_attempts.question_ids.
+    Mirrors alembic revision m7n8o9p0q1r2.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text as _sql
+    try:
+        with engine.begin() as conn:
+            conn.execute(_sql(
+                "ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS attempt_id INTEGER "
+                "REFERENCES quiz_attempts(id) ON DELETE CASCADE"
+            ))
+            conn.execute(_sql(
+                "CREATE INDEX IF NOT EXISTS ix_quiz_questions_attempt_id "
+                "ON quiz_questions (attempt_id)"
+            ))
+            conn.execute(_sql(
+                "ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS question_ids JSON"
+            ))
+    except Exception as e:  # never block startup on this
+        print(f"WARNING: quiz retake patch failed: {e}")
+
+
 _DEFAULT_EXAM_CATEGORIES = ("Entrance Exams", "Competitive Exams", "Academic Exams")
 
 
@@ -168,6 +218,8 @@ async def lifespan(app: FastAPI):
         _ensure_chapter_live_copy()
         _ensure_exam_categories()
         _ensure_student_consent_columns()
+        _ensure_quiz_retake_columns()
+        _ensure_streak_columns()
     except Exception as e:
         print(f"WARNING: DB error on startup: {e}")
 
@@ -322,6 +374,10 @@ app.include_router(admin_exams.router,
                    prefix="/api/admin/exams",
                    tags=["Admin - Exam Management"])
 
+app.include_router(admin_streaks.router,
+                   prefix="/api/admin/streaks",
+                   tags=["Admin - Learning Streaks"])
+
 
 # ═══════════════════════════════════════════════════════════════
 # COMMON APIs
@@ -377,6 +433,10 @@ app.include_router(student_profile.router,
 app.include_router(student_notifications.router,
                    prefix="/api/student/notifications",
                    tags=["Student - Notifications"])
+
+app.include_router(student_streak.router,
+                   prefix="/api/student/streak",
+                   tags=["Student - Learning Streaks"])
 
 # ═══════════════════════════════════════════════════════════════
 # TEACHER APP APIs

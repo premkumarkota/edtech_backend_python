@@ -26,6 +26,7 @@ _CATEGORY_MAP = {
     "instant_session_expired": "sessions",
     "study_session_reminder": "study_planner",
     "study_streak_reminder": "study_planner",
+    "streak_reminder": "study_planner",
     "study_plan_reminder": "study_planner",
     "subscription_activated": "offers",
     "withdrawal_processing": "system",
@@ -424,6 +425,21 @@ def notify_student_streak_reminder(
         title="Don't break your streak! 🔥",
         body=f"You have a {current_streak}-day streak. Study today to keep it alive!",
         data={"type": "study_streak_reminder"},
+    )
+
+
+def notify_student_learning_streak_reminder(
+    fcm_token: str,
+    current_streak: int,
+    user_id: Optional[int] = None,
+) -> bool:
+    """7 PM IST nudge: live learning streak, nothing learned yet today."""
+    return send_push(
+        fcm_token=fcm_token,
+        title=f"Your {current_streak}-day streak ends at midnight 🔥",
+        body="A 5-minute quiz keeps your flame alive. You've got this!",
+        data={"type": "streak_reminder", "current_streak": str(current_streak)},
+        user_id=user_id,
     )
 
 

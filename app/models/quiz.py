@@ -1,6 +1,6 @@
 import enum
 from sqlalchemy import (Column, Integer, String, Text, Boolean, Float,
-                         DateTime, ForeignKey, Enum, CHAR, UniqueConstraint)
+                         DateTime, ForeignKey, Enum, CHAR, UniqueConstraint, JSON)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -57,7 +57,11 @@ class Quiz(Base):
     syllabus  = relationship("Syllabus")
     chapter   = relationship("Chapter")
     creator   = relationship("User")
+    # Admin-authored questions only — per-attempt retake variants (attempt_id
+    # set) are owned by their attempt and never part of the quiz itself.
     questions = relationship("QuizQuestion", back_populates="quiz",
+                             primaryjoin="and_(Quiz.id == QuizQuestion.quiz_id, "
+                                         "QuizQuestion.attempt_id.is_(None))",
                              cascade="all, delete-orphan")
     attempts  = relationship("QuizAttempt", back_populates="quiz",
                              cascade="all, delete-orphan")
@@ -79,6 +83,9 @@ class QuizQuestion(Base):
     explanation    = Column(Text, nullable=True)
     marks          = Column(Integer, default=1)
     order_index    = Column(Integer, default=0)
+    # Set only on AI-generated retake questions: the attempt they were made for.
+    attempt_id     = Column(Integer, ForeignKey("quiz_attempts.id", ondelete="CASCADE"),
+                            nullable=True, index=True)
     created_at     = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationship
@@ -104,6 +111,9 @@ class QuizAttempt(Base):
     started_at      = Column(DateTime(timezone=True), server_default=func.now())
     completed_at    = Column(DateTime(timezone=True), nullable=True)
     time_taken_secs = Column(Integer, nullable=True)
+    # Ordered quiz_questions ids served for this attempt (retakes get fresh
+    # questions). NULL = the quiz's own question set.
+    question_ids    = Column(JSON, nullable=True)
 
     # Relationships
     quiz    = relationship("Quiz", back_populates="attempts")

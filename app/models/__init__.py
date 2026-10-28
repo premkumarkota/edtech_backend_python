@@ -41,7 +41,7 @@ from app.models.study_planner_v2 import (                      # Depends on User
     StudyGoal, StudyGoalSubject, StudyTimeSlot,
     StudyCalendarEntry, StudyMcqBank, StudyMcqAttempt,
     StudyChapterSubtopic,
-    StudyStreak, StudyBadge,
+    StudyStreak, StudyBadge, StudentLearningDay,
 )
 
 __all__ = [
@@ -72,7 +72,7 @@ __all__ = [
     "GoalExam", "GoalExamSubject",
     "StudyGoal", "StudyGoalSubject", "StudyTimeSlot",
     "StudyCalendarEntry", "StudyMcqBank", "StudyMcqAttempt", "StudyChapterSubtopic",
-    "StudyStreak", "StudyBadge",
+    "StudyStreak", "StudyBadge", "StudentLearningDay",
     # Notifications
     "Notification",
 ]

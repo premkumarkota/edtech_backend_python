@@ -5,6 +5,7 @@ GET  /api/student/sessions               My upcoming/past sessions
 POST /api/student/sessions/{id}/join     Get Agora token to join
 POST /api/student/sessions/{id}/cancel   Cancel a booking
 """
+import math
 import uuid
 import time as time_module
 from datetime import datetime, date, time, timezone, timedelta
@@ -21,10 +22,11 @@ from app.models.teacher_profile import TeacherProfile, TeacherStatus
 from app.models.availability import TeacherAvailability, TeacherAvailabilityOverride, TeacherDateSlot
 from app.schemas.session import (
     BookSessionRequest, SessionResponse, JoinSessionResponse,
-    CancelSessionRequest, CancelSessionResponse,
+    CancelSessionRequest, CancelSessionResponse, EndSessionResponse,
     InstantSessionRequestCreate, InstantSessionRequestResponse,
 )
 from app.services.subscription_service import require_video_minutes
+from app.services.session_completion import complete_session, minutes_remaining
 from app.utils.fcm import (
     notify_teacher_session_booked,
     notify_teacher_session_cancelled,
@@ -469,6 +471,41 @@ def join_session(
         agora_channel_name=sess.agora_channel_name,
         agora_token=agora_token,
         uid=student.id,
+    )
+
+
+@router.post("/{session_id}/end", response_model=EndSessionResponse)
+def end_session(
+    session_id: int,
+    student: User = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Student ends a live call. Settles it exactly like teacher End Session
+    (billing, minutes, teacher earning) but with the duration measured by the
+    server from `started_at`, so the client can't under-report it.
+    """
+    sess = db.query(VideoCallSession).filter(
+        VideoCallSession.id == session_id,
+        VideoCallSession.student_id == student.id,
+        VideoCallSession.status == SessionStatus.IN_PROGRESS.value,
+    ).with_for_update().first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Active session not found.")
+
+    now = datetime.now(timezone.utc)
+    started = _utc(sess.started_at or now)
+    elapsed_mins = max(1, math.ceil((now - started).total_seconds() / 60))
+
+    billable_mins, earning = complete_session(sess, elapsed_mins, db, ended_at=now)
+    remaining = minutes_remaining(sess)
+    db.commit()
+
+    return EndSessionResponse(
+        session_id=sess.id,
+        actual_duration_mins=billable_mins,
+        student_minutes_remaining=max(0, remaining),
+        teacher_earning=float(earning.gross_earning) if earning else 0.0,
     )
 
 

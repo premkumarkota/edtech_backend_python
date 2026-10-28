@@ -28,7 +28,9 @@ from app.schemas.session import (
     InstantSessionRequestResponse, InstantSessionDeclineRequest,
 )
 from app.schemas.payout import TeacherEarningItem, TeacherEarningSummary
-from app.services.payout_service import create_teacher_earning
+from app.services.session_completion import (
+    billable_minutes, complete_session, minutes_remaining,
+)
 from app.services.teacher_wallet import get_wallet
 from app.utils.fcm import (
     notify_student_session_cancelled,
@@ -42,7 +44,6 @@ from app.config import settings
 router = APIRouter()
 
 AGORA_ROLE_PUBLISHER = 1
-SESSION_OVERRUN_GRACE_MINS = 10
 NO_SHOW_GRACE_MINS = 15
 
 
@@ -442,34 +443,13 @@ def end_session(
     if sess.earning:
         raise HTTPException(status_code=409, detail="Session earning already exists.")
 
-    sub = sess.subscription
-    remaining_before = sub.video_call_minutes_total - sub.video_call_minutes_used
-    if remaining_before <= 0:
+    if minutes_remaining(sess) <= 0:
         raise HTTPException(status_code=400, detail="Student has no video minutes remaining.")
-
-    max_billable_mins = sess.scheduled_duration_mins + SESSION_OVERRUN_GRACE_MINS
-    billable_mins = min(
-        payload.actual_duration_mins,
-        max_billable_mins,
-        remaining_before,
-    )
-
-    if billable_mins < 1:
+    if billable_minutes(sess, payload.actual_duration_mins) < 1:
         raise HTTPException(status_code=400, detail="Billable session duration must be at least 1 minute.")
 
-    # 1. Complete the session
-    sess.status = SessionStatus.COMPLETED.value
-    sess.ended_at = datetime.now(timezone.utc)
-    sess.actual_duration_mins = billable_mins
-
-    # 2. Deduct minutes from student subscription
-    sub.video_call_minutes_used += billable_mins
-    remaining = sub.video_call_minutes_total - sub.video_call_minutes_used
-
-    # 3. Create teacher earning (rate snapshot + gross calculation)
-    earning = create_teacher_earning(sess, billable_mins, db)
-    db.flush()   # Get earning.id before commit
-
+    billable_mins, earning = complete_session(sess, payload.actual_duration_mins, db)
+    remaining = minutes_remaining(sess)
     db.commit()
 
     return EndSessionResponse(

@@ -110,6 +110,9 @@ def chat_completion(
         logger.error(f"Claude request failed: {e}")
         return None
 
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        logger.warning(f"Claude response truncated at max_tokens={max_tokens}")
+
     text = "".join(
         block.text for block in response.content if getattr(block, "type", None) == "text"
     ).strip()
@@ -137,12 +140,23 @@ def chat_completion_json(
     try:
         return json.loads(result)
     except json.JSONDecodeError:
-        # Try to extract JSON from markdown code blocks
-        if "```json" in result:
-            json_str = result.split("```json")[1].split("```")[0].strip()
+        pass
+
+    # Try to extract JSON from markdown code blocks, then from the outermost braces
+    candidates = []
+    if "```json" in result:
+        candidates.append(result.split("```json")[1].split("```")[0].strip())
+    elif "```" in result:
+        candidates.append(result.split("```")[1].split("```")[0].strip())
+    start, end = result.find("{"), result.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(result[start:end + 1])
+
+    for json_str in candidates:
+        try:
             return json.loads(json_str)
-        elif "```" in result:
-            json_str = result.split("```")[1].split("```")[0].strip()
-            return json.loads(json_str)
-        logger.error(f"Failed to parse Claude JSON response: {result[:200]}")
-        return None
+        except json.JSONDecodeError:
+            continue
+
+    logger.error(f"Failed to parse Claude JSON response: {result[:200]}")
+    return None

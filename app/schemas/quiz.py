@@ -157,6 +157,12 @@ class QuizAttemptResponse(BaseModel):
         from_attributes = True
 
 
+class QuizStartResponse(QuizAttemptResponse):
+    """Start/resume result — includes the questions served for this attempt."""
+    questions: List[QuizQuestionResponse] = []
+    fresh_questions: bool = False
+
+
 class QuizResultResponse(QuizAttemptResponse):
     """Full result including per-question breakdown."""
     quiz_title: str = ""

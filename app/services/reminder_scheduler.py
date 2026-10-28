@@ -13,11 +13,13 @@ from datetime import datetime, timezone, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 from app.database import SessionLocal
 from app.models.session import VideoCallSession, SessionStatus
 from app.models.user import User
 from app.utils.fcm import notify_session_reminder
+from app.services.session_auto_close import auto_close_stale_sessions
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,47 @@ def _send_reminders() -> None:
         db.close()
 
 
+def _settle_streaks() -> None:
+    """Just after IST midnight: apply freezes / breaks for missed days."""
+    from app.services.streak_service import nightly_settle_all
+    db = SessionLocal()
+    try:
+        n = nightly_settle_all(db)
+        db.commit()
+        if n:
+            logger.info(f"Streaks settled for {n} student(s)")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Streak settle job failed: {e}")
+    finally:
+        db.close()
+
+
+def _send_streak_reminders() -> None:
+    """19:00 IST: one nudge to students whose live streak isn't safe yet today."""
+    from app.services.streak_service import students_to_remind, today_ist
+    from app.utils.fcm import notify_student_learning_streak_reminder
+    db = SessionLocal()
+    try:
+        today = today_ist()
+        sent = 0
+        for user, streak in students_to_remind(db):
+            streak.last_reminder_on = today   # mark first, like session reminders
+            db.flush()
+            if notify_student_learning_streak_reminder(
+                user.fcm_token, streak.current_streak, user_id=user.id,
+            ):
+                sent += 1
+        db.commit()
+        if sent:
+            logger.info(f"Streak reminders sent: {sent}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Streak reminder job failed: {e}")
+    finally:
+        db.close()
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 _scheduler: BackgroundScheduler | None = None
@@ -104,8 +147,24 @@ def start_scheduler() -> None:
         max_instances=1,       # Never run two reminder jobs at once
         misfire_grace_time=60, # Allow up to 60s late if server was busy
     )
+    # Learning streaks: settle at 00:05 IST (18:35 UTC), remind at 19:00 IST (13:30 UTC).
+    _scheduler.add_job(_settle_streaks, trigger=CronTrigger(hour=18, minute=35),
+                       id="streak_settle", replace_existing=True,
+                       max_instances=1, misfire_grace_time=3600)
+    _scheduler.add_job(_send_streak_reminders, trigger=CronTrigger(hour=13, minute=30),
+                       id="streak_reminder", replace_existing=True,
+                       max_instances=1, misfire_grace_time=1800)
+    # Completes live sessions the teacher left without tapping End Session.
+    _scheduler.add_job(
+        auto_close_stale_sessions,
+        trigger=IntervalTrigger(minutes=2),
+        id="session_auto_close",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
+    )
     _scheduler.start()
-    logger.info("Session reminder scheduler started (every 2 min).")
+    logger.info("Session reminder + auto-close scheduler started (every 2 min).")
 
 
 def stop_scheduler() -> None:

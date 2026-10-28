@@ -246,9 +246,30 @@ class StudyStreak(Base):
     current_streak = Column(Integer, default=0)
     longest_streak = Column(Integer, default=0)
     last_study_date = Column(Date, nullable=True)
+    # Learning streaks (2026-10-28): freezes cover missed days; a broken streak
+    # can be repaired the day it breaks (see app/services/streak_service.py).
+    freezes = Column(Integer, default=0, nullable=False, server_default="0")
+    broken_streak = Column(Integer, default=0, nullable=False, server_default="0")
+    broken_on = Column(Date, nullable=True)
+    repair_used_on = Column(Date, nullable=True)
+    last_reminder_on = Column(Date, nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     student = relationship("User", foreign_keys=[student_id])
+
+
+class StudentLearningDay(Base):
+    """One row per student per IST day they learned (or a freeze covered)."""
+    __tablename__ = "student_learning_days"
+    __table_args__ = (UniqueConstraint("student_id", "day", name="uq_student_learning_day"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    day = Column(Date, nullable=False, index=True)
+    activities = Column(Integer, default=0, nullable=False)
+    sources = Column(JSON, default=list)          # e.g. ["quiz", "planner_session"]
+    frozen = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 # ═══════════════════════════════════════════════════════════

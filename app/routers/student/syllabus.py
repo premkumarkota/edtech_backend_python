@@ -14,6 +14,8 @@ from app.services.quiz_marks import (
     effective_pass_marks, pass_percentage, chapter_quiz_passed,
 )
 
+from app.services.streak_service import safe_record as record_streak
+
 router = APIRouter()
 
 @router.get("/", response_model=List[SyllabusSummary])
@@ -82,10 +84,13 @@ def mark_chapter_read(
     if not prog:
         prog = ChapterProgress(student_id=student.id, chapter_id=chapter_id)
         db.add(prog)
-    if not prog.content_read_at:
+    first_read = not prog.content_read_at
+    if first_read:
         prog.content_read_at = datetime.now(timezone.utc)
     db.commit()
-    return {"content_read": True}
+    # Finishing a chapter's reading counts as a learning day (first time only).
+    streak = record_streak(student.id, "chapter_read", db) if first_read else None
+    return {"content_read": True, "streak": streak}
 
 
 @router.get("/chapters/{chapter_id}/quiz-state")

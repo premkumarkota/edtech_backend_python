@@ -236,54 +236,14 @@ def _schedule_revision_sessions(db) -> int:
 
 def update_streak(student_id: int, db) -> StudyStreak:
     """
-    Update streak for a student. Called after completing a session
-    or during nightly cron.
+    Nightly cron hook. Streaks are now owned by app/services/streak_service.py
+    (activity is recorded as it happens); here we only apply freezes / breaks
+    for missed days.
     """
-    now_ist = datetime.now(timezone.utc) + _IST_OFFSET
-    today_ist = now_ist.date()
-    yesterday = today_ist - timedelta(days=1)
+    from app.services.streak_service import _get_streak, settle_missed_days
 
-    streak = db.query(StudyStreak).filter(StudyStreak.student_id == student_id).first()
-    if not streak:
-        streak = StudyStreak(student_id=student_id, current_streak=0, longest_streak=0)
-        db.add(streak)
-        db.flush()
-
-    # Check if student studied today
-    studied_today = (
-        db.query(StudyCalendarEntry)
-        .join(StudyGoal, StudyGoal.id == StudyCalendarEntry.goal_id)
-        .filter(
-            StudyGoal.student_id == student_id,
-            StudyCalendarEntry.status == "completed",
-            StudyCalendarEntry.completed_at.isnot(None),
-        )
-        .all()
-    )
-
-    # Filter by IST date
-    today_completed = any(
-        (e.completed_at.replace(tzinfo=timezone.utc) + _IST_OFFSET).date() == today_ist
-        for e in studied_today
-        if e.completed_at
-    )
-
-    if today_completed:
-        if streak.last_study_date == yesterday:
-            streak.current_streak += 1
-        elif streak.last_study_date == today_ist:
-            pass  # Already counted today
-        else:
-            streak.current_streak = 1
-
-        streak.last_study_date = today_ist
-        streak.longest_streak = max(streak.longest_streak, streak.current_streak)
-    else:
-        # During nightly cron: if yesterday wasn't studied, reset
-        if streak.last_study_date and streak.last_study_date < yesterday:
-            streak.current_streak = 0
-
-    streak.updated_at = datetime.now(timezone.utc)
+    streak = _get_streak(student_id, db, lock=True)
+    settle_missed_days(streak, db)
     db.flush()
     return streak
 
@@ -718,20 +678,13 @@ def start_study_planner_scheduler() -> None:
         misfire_grace_time=60,
     )
 
-    # 3. Streak reminder — 11:00 UTC = 16:30 IST (evening nudge)
-    _study_scheduler.add_job(
-        _streak_reminder_job,
-        trigger=CronTrigger(hour=11, minute=0),
-        id="study_streak_reminder",
-        replace_existing=True,
-        max_instances=1,
-        misfire_grace_time=300,
-    )
+    # 3. Streak reminder moved to app/services/reminder_scheduler.py
+    #    (learning streaks, 19:00 IST) so students never get two pushes.
 
     _study_scheduler.start()
     logger.info(
         "Study Planner scheduler started: "
-        "nightly@19:00UTC, reminders@every5min, streak@11:00UTC"
+        "nightly@19:00UTC, reminders@every5min"
     )
 
 

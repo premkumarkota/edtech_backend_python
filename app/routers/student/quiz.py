@@ -9,12 +9,17 @@ from app.dependencies import require_student
 from app.models.user import User
 from app.models.quiz import Quiz, QuizQuestion, QuizAttempt, QuizAnswer, QuizStatus, AttemptStatus, ChapterProgress
 from app.services.quiz_marks import effective_pass_marks, chapter_quiz_passed
+from app.services.streak_service import safe_record as record_streak
+from app.services.quiz_retake_service import (
+    attempt_questions, has_completed_attempt, prepare_retake_questions, scoring_questions,
+)
 from app.services.subscription_service import (
     consume_mock_test, mock_test_access, MOCK_SUBSCRIPTION_REQUIRED,
 )
 from app.schemas.quiz import (
     QuizResponse, QuizQuestionResponse, QuizAttemptResponse,
-    QuizSubmit, QuizResultResponse, LeaderboardEntry, GlobalRankEntry
+    QuizSubmit, QuizResultResponse, LeaderboardEntry, GlobalRankEntry,
+    QuizStartResponse,
 )
 
 router = APIRouter()
@@ -190,9 +195,21 @@ def get_quiz(quiz_id: int, student: User = Depends(require_student), db: Session
         "questions": [q.dict() for q in questions],
     }
 
-@router.post("/{quiz_id}/start", response_model=QuizAttemptResponse)
-def start_quiz(quiz_id: int, student: User = Depends(require_student), db: Session = Depends(get_db)):
-    """Initialize a quiz attempt. Used for resuming or creating new attempts."""
+@router.post("/{quiz_id}/start", response_model=QuizStartResponse)
+def start_quiz(
+    quiz_id: int,
+    fresh_questions: bool = Query(
+        False, description="Retakes get a new AI-generated question set (current app builds send true)",
+    ),
+    student: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """Initialize a quiz attempt. Used for resuming or creating new attempts.
+
+    The response carries the attempt's `questions`: on a retake (student already
+    completed this quiz) with `fresh_questions=true` these are new questions,
+    not the ones from GET /quiz/{id}.
+    """
     quiz = db.query(Quiz).filter(Quiz.id == quiz_id, Quiz.status == QuizStatus.PUBLISHED).first()
     if not quiz: raise HTTPException(404)
 
@@ -202,7 +219,9 @@ def start_quiz(quiz_id: int, student: User = Depends(require_student), db: Sessi
         QuizAttempt.student_id == student.id,
         QuizAttempt.status == AttemptStatus.IN_PROGRESS
     ).first()
-    if existing: return existing
+    if existing: return _start_response(existing, db)
+
+    is_retake = has_completed_attempt(quiz_id, student.id, db)
 
     # Mock tests: require an active plan and spend one credit per distinct
     # test (retakes within the same subscription are free). Same transaction
@@ -219,7 +238,29 @@ def start_quiz(quiz_id: int, student: User = Depends(require_student), db: Sessi
     db.add(attempt)
     db.commit()
     db.refresh(attempt)
-    return attempt
+
+    # AI call runs after the commit so the subscription row isn't locked
+    # meanwhile; on failure the attempt just keeps the quiz's own questions.
+    if fresh_questions and is_retake:
+        try:
+            if prepare_retake_questions(quiz, attempt, db):
+                db.commit()
+            else:
+                db.rollback()
+        except Exception:
+            db.rollback()
+        db.refresh(attempt)
+    return _start_response(attempt, db)
+
+
+def _start_response(attempt: QuizAttempt, db: Session) -> dict:
+    data = QuizAttemptResponse.model_validate(attempt).model_dump()
+    data["questions"] = [
+        QuizQuestionResponse.model_validate(q).model_dump()
+        for q in attempt_questions(attempt, db)
+    ]
+    data["fresh_questions"] = bool(attempt.question_ids)
+    return data
 
 @router.post("/attempt/{attempt_id}/save-answer")
 def save_answer(
@@ -278,7 +319,7 @@ def submit_quiz(
     if not attempt: raise HTTPException(404)
 
     quiz = attempt.quiz
-    questions = {q.id: q for q in quiz.questions}
+    questions = {q.id: q for q in scoring_questions(attempt, db)}
     user_answers = {a.question_id: a for a in attempt.answers}
 
     score = 0
@@ -324,7 +365,12 @@ def submit_quiz(
 
     db.commit()
 
+    # A completed quiz is a learning day (after the commit: a streak failure
+    # must never lose the result).
+    streak = record_streak(student.id, "mock_test" if quiz.quiz_type == "mock" else "quiz", db)
+
     return {
+        "streak": streak,
         "score": score,
         "total": total,
         "passed": attempt.passed,
@@ -341,7 +387,7 @@ def get_result(attempt_id: int, student: User = Depends(require_student), db: Se
         raise HTTPException(404)
 
     breakdown = []
-    for q in attempt.quiz.questions:
+    for q in scoring_questions(attempt, db):
         ans = next((a for a in attempt.answers if a.question_id == q.id), None)
         breakdown.append({
             "question": q.question_text,

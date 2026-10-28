@@ -38,9 +38,10 @@ from app.services.study_plan_engine import (
     collect_study_units, calculate_feasibility, generate_plan_for_goal,
 )
 from app.services.study_mcq_service import get_or_generate_mcq, score_mcq_attempt
+from app.services.streak_service import record_learning_activity
 from app.services.study_rate_limit import check_rate_limit
 from app.services.study_reschedule_service import (
-    update_streak, check_and_award_badges, reschedule_entry,
+    check_and_award_badges, reschedule_entry,
 )
 
 logger = logging.getLogger(__name__)
@@ -736,7 +737,7 @@ def complete_session(
     entry.completed_at = datetime.now(timezone.utc)
 
     # Update streak
-    streak = update_streak(student.id, db)
+    streak_event = record_learning_activity(student.id, "planner_session", db)
     check_and_award_badges(student.id, entry.goal_id, db)
 
     # Update goal progress
@@ -754,7 +755,8 @@ def complete_session(
 
     return {
         "message": "Session completed",
-        "streak": streak.current_streak,
+        "streak": streak_event["current_streak"],
+        "streak_event": streak_event,
         "completion_pct": goal.completion_pct if goal else 0,
     }
 
@@ -919,7 +921,7 @@ def submit_mcq(
         message = f"Great job! You passed with {score}%."
 
         # Update streak
-        streak = update_streak(student.id, db)
+        streak_event = record_learning_activity(student.id, "planner_session", db)
         check_and_award_badges(student.id, entry.goal_id, db)
 
         # Update goal progress

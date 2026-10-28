@@ -182,7 +182,10 @@ def get_subtopics(
                 {"role": "user", "content": context},
             ],
             temperature=0.4,
-            max_tokens=1500,
+            # Telugu titles/summaries tokenize ~3-4x heavier than English.
+            max_tokens=6000 if any(
+                "ఀ" <= ch <= "౿" for ch in f"{chapter_title}{description or ''}"
+            ) else 1500,
         )
         if result and isinstance(result.get("subtopics"), list) and result["subtopics"]:
             subtopics = _normalize(result["subtopics"], content_items, chapter_title, n)
