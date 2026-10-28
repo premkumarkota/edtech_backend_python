@@ -915,6 +915,7 @@ def submit_mcq(
     entry.mcq_passed = passed
 
     revision_date = None
+    streak_event = None
     if passed:
         entry.status = "completed"
         entry.completed_at = datetime.now(timezone.utc)
@@ -985,6 +986,7 @@ def submit_mcq(
         session_status=session_status,
         revision_scheduled_date=revision_date if not passed else None,
         message=message,
+        streak_event=streak_event,
     )
 
 
@@ -1083,40 +1085,37 @@ def get_streak(
     student: User = Depends(get_onboarded_student),
     db: Session = Depends(get_db),
 ):
-    """Get current streak info."""
-    streak = db.query(StudyStreak).filter(StudyStreak.student_id == student.id).first()
+    """
+    Planner view of the learning streak. Same numbers as /api/student/streak:
+    history is the learning-day log (quizzes, chapter reads and planner
+    sessions all count; a freeze-covered day counts as kept).
+    """
+    from app.models.study_planner_v2 import StudentLearningDay
+    from app.services.streak_service import _get_streak, settle_missed_days, today_ist
 
-    if not streak:
-        return StreakResponse(
-            current_streak=0, longest_streak=0,
-            is_active_today=False, streak_history=[],
-        )
+    today = today_ist()
+    streak = _get_streak(student.id, db, lock=True)
+    settle_missed_days(streak, db, today)
+    db.commit()
 
-    now_ist = datetime.now(timezone.utc) + _IST_OFFSET
-    today_ist = now_ist.date()
-    is_active = streak.last_study_date == today_ist
-
-    # Build 30-day history
-    history = []
-    for i in range(29, -1, -1):
-        d = today_ist - timedelta(days=i)
-        studied = (
-            db.query(StudyCalendarEntry)
-            .join(StudyGoal, StudyGoal.id == StudyCalendarEntry.goal_id)
-            .filter(
-                StudyGoal.student_id == student.id,
-                StudyCalendarEntry.status == "completed",
-                StudyCalendarEntry.plan_date == d,
-            )
-            .first()
-        ) is not None
-        history.append(StreakHistoryDay(date=d, studied=studied))
+    start = today - timedelta(days=29)
+    kept = {
+        r.day for r in db.query(StudentLearningDay).filter(
+            StudentLearningDay.student_id == student.id,
+            StudentLearningDay.day >= start,
+        ).all()
+        if r.activities or r.frozen
+    }
+    history = [
+        StreakHistoryDay(date=start + timedelta(days=i), studied=(start + timedelta(days=i)) in kept)
+        for i in range(30)
+    ]
 
     return StreakResponse(
-        current_streak=streak.current_streak,
-        longest_streak=streak.longest_streak,
+        current_streak=streak.current_streak or 0,
+        longest_streak=streak.longest_streak or 0,
         last_study_date=streak.last_study_date,
-        is_active_today=is_active,
+        is_active_today=today in kept,
         streak_history=history,
     )
 

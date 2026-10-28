@@ -294,6 +294,9 @@ class McqSubmitResponse(BaseModel):
     session_status: str
     revision_scheduled_date: Optional[date] = None
     message: str = ""
+    # Learning-streak celebration event (app/services/streak_service.py);
+    # only set when the session was passed and counted.
+    streak_event: Optional[dict] = None
 
 
 # ═══════════════════════════════════════════════════════════
