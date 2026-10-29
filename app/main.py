@@ -149,6 +149,22 @@ def _ensure_streak_columns():
         print(f"WARNING: streak patch failed: {e}")
 
 
+def _ensure_teacher_terms_columns():
+    """Teacher Terms acceptance on teacher_profiles. Mirrors alembic o9p0q1r2s3t4."""
+    if engine.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text as _sql
+    try:
+        with engine.begin() as conn:
+            for col, typ in (("teacher_terms_accepted_at", "TIMESTAMPTZ"),
+                             ("legal_version", "VARCHAR(20)")):
+                conn.execute(_sql(
+                    f"ALTER TABLE teacher_profiles ADD COLUMN IF NOT EXISTS {col} {typ}"
+                ))
+    except Exception as e:  # never block startup on this
+        print(f"WARNING: teacher terms patch failed: {e}")
+
+
 def _ensure_quiz_retake_columns():
     """
     Idempotent patch for fresh retake questions: quiz_questions.attempt_id
@@ -220,6 +236,7 @@ async def lifespan(app: FastAPI):
         _ensure_student_consent_columns()
         _ensure_quiz_retake_columns()
         _ensure_streak_columns()
+        _ensure_teacher_terms_columns()
     except Exception as e:
         print(f"WARNING: DB error on startup: {e}")
 

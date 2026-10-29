@@ -1,5 +1,11 @@
-from fastapi import APIRouter
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
+
+from app.services.legal_content import (
+    get_policy, list_policies, markdown_to_html, LAST_UPDATED,
+)
 
 router = APIRouter()
 
@@ -64,6 +70,12 @@ def _page_template(title: str, body: str) -> str:
       margin-top: 8px;
     }}
     ul {{ margin-top: 6px; }}
+    .table {{ overflow-x: auto; margin: 8px 0 14px; }}
+    table {{ border-collapse: collapse; width: 100%; font-size: 14px; }}
+    th, td {{ border: 1px solid var(--border); padding: 8px 10px; text-align: left;
+              vertical-align: top; color: var(--muted); }}
+    th {{ background: #f3f6fb; color: var(--text); }}
+    nav.legal a {{ display: block; padding: 10px 0; border-bottom: 1px solid var(--border); }}
   </style>
 </head>
 <body>
@@ -210,3 +222,49 @@ def account_deletion():
     """
     return _page_template("MyMentor Account Deletion", body)
 
+
+
+# ── Legal policies (app/services/legal_content.py) ───────────────────────────
+# JSON for the student / teacher apps; HTML pages for store & gateway listings.
+
+@router.get("/api/common/legal", tags=["Public - Legal"])
+def legal_index(audience: Optional[str] = Query(None, pattern="^(student|teacher)$")):
+    """Policies for one app (`audience=student|teacher`) or all of them."""
+    return {"last_updated": LAST_UPDATED, "policies": list_policies(audience)}
+
+
+@router.get("/api/common/legal/{slug}", tags=["Public - Legal"])
+def legal_policy(slug: str):
+    policy = get_policy(slug)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    return policy
+
+
+@router.get("/legal", response_class=HTMLResponse, tags=["Public - Legal"])
+def legal_index_page():
+    links = "".join(
+        f'<a href="/legal/{p["slug"]}">{p["title"]}</a>' for p in list_policies()
+    )
+    body = f"""
+    <div class="card">
+      <span class="badge">MyMentor</span>
+      <h1>Legal</h1>
+      <nav class="legal">{links}</nav>
+    </div>"""
+    return _page_template("MyMentor Legal", body)
+
+
+@router.get("/legal/{slug}", response_class=HTMLResponse, tags=["Public - Legal"])
+def legal_policy_page(slug: str):
+    policy = get_policy(slug)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    body = f"""
+    <div class="card">
+      <span class="badge">MyMentor</span>
+      {markdown_to_html(policy["markdown"])}
+      <p class="footer">Last updated {policy["last_updated"]} ·
+        <a href="/legal">All policies</a></p>
+    </div>"""
+    return _page_template(f'MyMentor {policy["title"]}', body)

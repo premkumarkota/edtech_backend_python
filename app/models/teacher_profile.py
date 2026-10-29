@@ -72,6 +72,10 @@ class TeacherProfile(Base):
     available_now_expires_at = Column(DateTime(timezone=True), nullable=True)
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Teacher Terms "I agree" at onboarding (app/services/legal_content.py)
+    teacher_terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    legal_version = Column(String(20), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

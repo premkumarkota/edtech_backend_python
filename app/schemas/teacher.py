@@ -47,6 +47,10 @@ class TeacherOnboardingRequest(BaseModel):
     achievements: Optional[str] = None
     video_url: Optional[str] = None
 
+    # Separate "I agree to the Teacher Terms" (older app builds omit it).
+    teacher_terms_accepted: bool = False
+    legal_version: Optional[str] = None
+
 
 class TeacherProfileUpdateRequest(BaseModel):
     """

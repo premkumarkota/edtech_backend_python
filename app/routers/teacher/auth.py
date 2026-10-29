@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -217,6 +219,12 @@ def complete_teacher_onboarding(
         profile.achievements = request.achievements
     if request.video_url is not None:
         profile.video_url = request.video_url
+
+    if request.teacher_terms_accepted:
+        if not profile.teacher_terms_accepted_at:
+            profile.teacher_terms_accepted_at = datetime.now(timezone.utc)
+        if request.legal_version:
+            profile.legal_version = request.legal_version[:20]
 
     db.commit()
     db.refresh(current_user)
