@@ -297,6 +297,8 @@ class McqSubmitResponse(BaseModel):
     # Learning-streak celebration event (app/services/streak_service.py);
     # only set when the session was passed and counted.
     streak_event: Optional[dict] = None
+    # True when this session finished the whole goal.
+    goal_completed: bool = False
 
 
 # ═══════════════════════════════════════════════════════════

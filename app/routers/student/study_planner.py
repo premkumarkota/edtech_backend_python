@@ -55,6 +55,27 @@ def _ist_today() -> date:
     return (datetime.now(timezone.utc) + _IST_OFFSET).date()
 
 
+def _mark_goal_if_finished(goal: Optional[StudyGoal], db: Session) -> bool:
+    """
+    True when this completion finished the goal (nothing pending/in progress).
+    Marks it completed right away instead of waiting for the nightly job, so
+    the app can congratulate the student and point them to the next goal.
+    """
+    if not goal or goal.status == "completed":
+        return False
+    db.flush()
+    left = db.query(StudyCalendarEntry).filter(
+        StudyCalendarEntry.goal_id == goal.id,
+        StudyCalendarEntry.status.in_(["pending", "in_progress"]),
+    ).count()
+    if left:
+        return False
+    goal.status = "completed"
+    goal.completion_pct = 100.0
+    goal.updated_at = datetime.now(timezone.utc)
+    return True
+
+
 def _resolve_entry_contents(entry: StudyCalendarEntry, db: Session) -> list[ContentInfo]:
     """Resolve learning materials from snapshot IDs, or live by chapter if snapshot empty."""
     contents: list[ContentInfo] = []
@@ -751,6 +772,7 @@ def complete_session(
         goal.completion_pct = round(completed / total * 100, 1) if total else 0
         goal.total_study_minutes = (goal.total_study_minutes or 0) + entry.duration_mins
 
+    goal_completed = _mark_goal_if_finished(goal, db)
     db.commit()
 
     return {
@@ -758,6 +780,7 @@ def complete_session(
         "streak": streak_event["current_streak"],
         "streak_event": streak_event,
         "completion_pct": goal.completion_pct if goal else 0,
+        "goal_completed": goal_completed,
     }
 
 
@@ -973,6 +996,7 @@ def submit_mcq(
 
         message = f"You scored {score}%. A revision session has been scheduled. Review and try again!"
 
+    goal_completed = _mark_goal_if_finished(goal, db) if passed else False
     db.commit()
 
     result_details = [McqResultDetail(**r) for r in results]
@@ -987,6 +1011,7 @@ def submit_mcq(
         revision_scheduled_date=revision_date if not passed else None,
         message=message,
         streak_event=streak_event,
+        goal_completed=goal_completed,
     )
 
 
