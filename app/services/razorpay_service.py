@@ -67,11 +67,15 @@ def verify_payment_signature(
 def verify_webhook_signature(body: bytes, signature: str) -> bool:
     """
     Verify HMAC-SHA256 signature from Razorpay webhook.
-    Uses RAZORPAY_WEBHOOK_SECRET (different from key secret).
+    Uses RAZORPAY_WEBHOOK_SECRET (different from key secret). During an account
+    cutover RAZORPAY_WEBHOOK_SECRET_PREVIOUS is accepted too.
     """
-    expected = hmac.new(
-        settings.RAZORPAY_WEBHOOK_SECRET.encode("utf-8"),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    if not signature:
+        return False
+    for secret in (settings.RAZORPAY_WEBHOOK_SECRET, settings.RAZORPAY_WEBHOOK_SECRET_PREVIOUS):
+        if not secret:
+            continue
+        expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(expected, signature):
+            return True
+    return False

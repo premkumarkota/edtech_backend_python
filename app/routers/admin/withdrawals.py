@@ -3,15 +3,18 @@ Admin Withdrawal API
 ====================
 GET  /api/admin/withdrawals?status=pending    List withdrawal requests
 GET  /api/admin/withdrawals/{id}              Withdrawal detail
-POST /api/admin/withdrawals/{id}/process      Trigger payout (Cashfree or Razorpay X)
-GET  /api/admin/withdrawals/overview          Pipeline totals + Cashfree wallet
-POST /api/admin/withdrawals/{id}/sync         Re-check Cashfree status (missed webhook)
+POST /api/admin/withdrawals/{id}/process      Trigger payout (PAYOUT_PROVIDER: RazorpayX or Cashfree)
+GET  /api/admin/withdrawals/overview          Pipeline totals + payout provider (+ Cashfree wallet)
+POST /api/admin/withdrawals/{id}/sync         Re-check provider status (missed webhook)
 POST /api/admin/withdrawals/{id}/reject       Reject with reason
 
 Security:
 - All endpoints require admin JWT (require_admin).
 - process endpoint is idempotent-guarded: only processes pending requests.
-  Cashfree transfer_id = "withdrawal_{id}" also prevents double payment.
+  Both providers key the payout on "withdrawal_{id}" (RazorpayX idempotency
+  header / Cashfree transfer_id), which also prevents double payment.
+- sync uses the provider that actually paid the withdrawal (payout_provider_of),
+  so withdrawals sent before a PAYOUT_PROVIDER switch still settle.
 - Provider errors are surfaced as 502 — admin can retry after fixing the issue.
 - Webhook (or sync) finalises status to completed/failed.
 """
@@ -70,6 +73,25 @@ def _build_response(w: WithdrawalRequest) -> AdminWithdrawalResponse:
     )
 
 
+_PROVIDER_LABELS = {"razorpay": "RazorpayX", "cashfree": "Cashfree"}
+
+
+def _active_provider() -> str:
+    return "cashfree" if settings.PAYOUT_PROVIDER.lower() == "cashfree" else "razorpay"
+
+
+def payout_provider_of(w: WithdrawalRequest) -> Optional[str]:
+    """
+    Which provider a sent withdrawal went through, read from its stored
+    reference: RazorpayX ids start with "pout_"; anything else is Cashfree
+    (cf_transfer_id or the "withdrawal_{id}" transfer_id). None if never sent.
+    """
+    ref = w.razorpay_payout_id or ""
+    if not ref:
+        return None
+    return "razorpay" if ref.startswith("pout_") else "cashfree"
+
+
 # ── List ──────────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=List[AdminWithdrawalResponse])
@@ -102,8 +124,9 @@ def withdrawals_overview(
     """
     One call for the admin Withdrawals header:
       pipeline — count + total per status
+      provider — active payout rail ("razorpay" | "cashfree") + label + environment
       wallet   — Cashfree available balance and whether it covers what's
-                 waiting for approval (null if Cashfree is unreachable)
+                 waiting for approval (null for RazorpayX or if Cashfree is unreachable)
       minimum_withdrawal — admin-set minimum per request
     """
     rows = (
@@ -122,8 +145,9 @@ def withdrawals_overview(
     for s, count, amount in rows:
         pipeline[s] = {"count": count, "amount": Decimal(str(amount)).quantize(Decimal("0.01"))}
 
+    provider = _active_provider()
     wallet = None
-    if settings.PAYOUT_PROVIDER.lower() == "cashfree":
+    if provider == "cashfree":
         balance = cashfree.get_wallet_balance()
         if balance is not None:
             waiting = pipeline["pending"]["amount"]
@@ -137,6 +161,13 @@ def withdrawals_overview(
 
     return {
         "pipeline": pipeline,
+        "provider": provider,
+        "provider_label": _PROVIDER_LABELS[provider],
+        "environment": (
+            settings.CASHFREE_PAYOUT_ENV.lower() if provider == "cashfree" else rp.environment()
+        ),
+        # RazorpayX has no balance API for the payout account — check the dashboard.
+        "balance_supported": provider == "cashfree",
         "wallet": wallet,
         "minimum_withdrawal": get_min_withdrawal(db),
     }
@@ -170,17 +201,10 @@ def process_withdrawal(
     """
     Trigger the payout for a pending withdrawal via PAYOUT_PROVIDER.
 
-    Cashfree (default): one transfer call with bank details inline.
+    RazorpayX (default): contact → fund account → payout (_process_via_razorpay).
+    Cashfree (fallback): one transfer call with bank details inline.
 
-    Razorpay X (legacy) steps:
-      1. Validate withdrawal is in 'pending' status.
-      2. Load teacher's bank details (from DB, not the snapshot — need live IDs).
-      3. get_or_create_contact → cache contact_id.
-      4. get_or_create_fund_account → cache fund_account_id.
-      5. create_payout → store payout_id, set status='processing'.
-      6. Send FCM to teacher.
-
-    The webhook handler (payout.processed / payout.failed) will set the final status.
+    The provider webhook (or /sync) sets the final status.
     """
     w = db.query(WithdrawalRequest).filter(
         WithdrawalRequest.id == withdrawal_id
@@ -210,11 +234,25 @@ def process_withdrawal(
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher user not found.")
 
-    if settings.PAYOUT_PROVIDER.lower() == "cashfree":
+    if _active_provider() == "cashfree":
         return _process_via_cashfree(w, bank, teacher, admin, payload, db)
+    return _process_via_razorpay(w, bank, teacher, admin, payload, db)
 
-    # ── Legacy: Razorpay X ──
-    # Step 3: Contact
+
+def _process_via_razorpay(
+    w: WithdrawalRequest,
+    bank: TeacherBankDetails,
+    teacher: User,
+    admin: User,
+    payload: AdminProcessWithdrawalRequest,
+    db: Session,
+):
+    """
+    RazorpayX: contact → fund account (both cached on TeacherBankDetails) →
+    payout. Razorpay errors raise 502 and leave the withdrawal pending; the
+    idempotency key makes a retry safe. A synchronous terminal failure marks
+    the withdrawal failed (the teacher re-requests); processed completes it.
+    """
     contact_id = rp.get_or_create_contact(
         teacher_id=w.teacher_id,
         name=teacher.name,
@@ -224,9 +262,8 @@ def process_withdrawal(
     )
     if contact_id != bank.razorpay_contact_id:
         bank.razorpay_contact_id = contact_id
-        db.flush()
+        db.commit()   # keep the cache even if the payout call fails
 
-    # Step 4: Fund Account
     fund_account_id = rp.get_or_create_fund_account(
         teacher_id=w.teacher_id,
         contact_id=contact_id,
@@ -237,32 +274,40 @@ def process_withdrawal(
     )
     if fund_account_id != bank.razorpay_fund_account_id:
         bank.razorpay_fund_account_id = fund_account_id
-        # Update snapshot on withdrawal row too (for webhook reconciliation)
-        w.razorpay_fund_account_id = fund_account_id
-        db.flush()
+        db.commit()
 
-    # Step 5: Payout (raises HTTPException on Razorpay error)
-    payout_id = rp.create_payout(
+    result = rp.create_payout(
         withdrawal_request_id=w.id,
         fund_account_id=fund_account_id,
         amount_inr=w.amount,
     )
 
-    # Update withdrawal status atomically
-    w.status           = "processing"
-    w.razorpay_payout_id = payout_id
-    w.processed_by     = admin.id
-    w.admin_notes      = payload.notes
-    w.processed_at     = datetime.now(timezone.utc)
+    w.status                   = "processing"
+    w.razorpay_payout_id       = result.payout_id
+    w.razorpay_fund_account_id = fund_account_id
+    w.processed_by             = admin.id
+    w.admin_notes              = payload.notes
+    w.processed_at             = datetime.now(timezone.utc)
     db.commit()
 
     logger.info(
-        f"Admin {admin.id} processed withdrawal {w.id} → "
-        f"Razorpay payout {payout_id} | ₹{w.amount}"
+        f"Admin {admin.id} processed withdrawal {w.id} → RazorpayX payout "
+        f"{result.payout_id} | ₹{w.amount} | {result.status}"
     )
 
-    # Step 6: Notify teacher
-    if teacher.fcm_token:
+    if result.is_failed:
+        mark_withdrawal_failed(w, result.failure_reason, db)
+        return {
+            "message": f"Razorpay rejected the payout: {result.failure_reason}",
+            "withdrawal_id": w.id,
+            "payout_reference": w.razorpay_payout_id,
+            "provider_status": result.status,
+            "status": "failed",
+        }
+
+    if result.is_success:
+        mark_withdrawal_completed(w, result.utr or result.payout_id, db)
+    elif teacher.fcm_token:
         notify_withdrawal_processing(
             fcm_token=teacher.fcm_token,
             amount=float(w.amount),
@@ -270,10 +315,12 @@ def process_withdrawal(
         )
 
     return {
-        "message": "Payout initiated via Razorpay.",
+        "message": "Payout initiated via RazorpayX.",
         "withdrawal_id": w.id,
-        "razorpay_payout_id": payout_id,
-        "status": "processing",
+        "payout_reference": w.razorpay_payout_id,
+        "razorpay_payout_id": w.razorpay_payout_id,
+        "provider_status": result.status,
+        "status": w.status,
     }
 
 
@@ -341,7 +388,7 @@ def _process_via_cashfree(
     }
 
 
-# ── Sync (Cashfree status re-check) ───────────────────────────────────────────
+# ── Sync (provider status re-check) ───────────────────────────────────────────
 
 @router.post("/{withdrawal_id}/sync")
 def sync_withdrawal_status(
@@ -350,8 +397,9 @@ def sync_withdrawal_status(
     db: Session = Depends(get_db),
 ):
     """
-    Pull the latest transfer status from Cashfree and apply it.
-    Backup for a missed/delayed webhook. Only for 'processing' withdrawals.
+    Pull the latest payout status from the provider that sent this withdrawal
+    and apply it. Backup for a missed/delayed webhook. Only for 'processing'
+    withdrawals.
     """
     w = db.query(WithdrawalRequest).filter(
         WithdrawalRequest.id == withdrawal_id
@@ -364,6 +412,28 @@ def sync_withdrawal_status(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Withdrawal is '{w.status}'. Only processing withdrawals can be synced.",
         )
+
+    provider = payout_provider_of(w) or _active_provider()
+
+    if provider == "razorpay":
+        result = (
+            rp.get_payout(w.razorpay_payout_id)
+            if w.razorpay_payout_id
+            else rp.find_payout_by_reference(w.id)
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="RazorpayX has no payout for this withdrawal.")
+        if result.is_success:
+            mark_withdrawal_completed(w, result.utr or result.payout_id, db)
+        elif result.is_failed:
+            mark_withdrawal_failed(w, result.failure_reason, db)
+        return {
+            "withdrawal_id": w.id,
+            "provider": provider,
+            "provider_status": result.status,
+            "provider_status_code": result.status_reason,
+            "status": w.status,
+        }
 
     result = cashfree.get_transfer(cashfree.transfer_id_for(w.id))
     if result is None:
@@ -379,6 +449,7 @@ def sync_withdrawal_status(
 
     return {
         "withdrawal_id": w.id,
+        "provider": provider,
         "provider_status": result.status,
         "provider_status_code": result.status_code,
         "status": w.status,

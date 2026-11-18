@@ -26,18 +26,28 @@ class Settings(BaseSettings):
     GCP_BUCKET_NAME: Optional[str] = None
     GCP_PROJECT_ID: Optional[str] = "edtech-107e3"
 
-    # Razorpay — collection (student payments)
+    # Razorpay — collection (student payments). Payments dashboard →
+    # Account & Settings → API Keys (Quontriz account since 2026-10-30).
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""
+    # Old account's webhook secret, accepted during the cutover window only so
+    # late webhooks for orders created on the old account still verify.
+    RAZORPAY_WEBHOOK_SECRET_PREVIOUS: str = ""
 
-    # Razorpay X — payouts (teacher withdrawals)
-    # The Current Account number linked to your Razorpay X account.
-    # Find it in Razorpay Dashboard → Payouts → Settings → Account Number.
+    # RazorpayX — payouts (teacher withdrawals). RazorpayX dashboard →
+    # Settings → Developer Controls. Leave the key pair empty to reuse the PG keys
+    # (same Razorpay account); set them if X issues its own pair.
+    RAZORPAYX_KEY_ID: str = ""
+    RAZORPAYX_KEY_SECRET: str = ""
+    # RazorpayX → Settings → Developer Controls → Webhooks (separate from PG webhooks).
+    RAZORPAYX_WEBHOOK_SECRET: str = ""
+    # The RazorpayX business account number payouts are debited from
+    # (RazorpayX → Account Statement / My Account; Current Account or the X Lite number).
     RAZORPAY_ACCOUNT_NUMBER: str = ""
 
-    # Teacher payout rail: "cashfree" (live) | "razorpay" (legacy Razorpay X)
-    PAYOUT_PROVIDER: str = "cashfree"
+    # Teacher payout rail: "razorpay" (RazorpayX, live from 2026-10-30) | "cashfree" (fallback)
+    PAYOUT_PROVIDER: str = "razorpay"
 
     # Cashfree Payouts (teacher withdrawals) — Payouts Dashboard → Developers → API Keys.
     # These are PAYOUTS keys, not Payment Gateway keys.

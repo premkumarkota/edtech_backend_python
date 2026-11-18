@@ -1,27 +1,38 @@
 """
-Razorpay X Payout Service
-=========================
-Handles teacher bank payouts via the Razorpay Payouts API.
+RazorpayX Payout Service
+========================
+Teacher bank payouts via the RazorpayX Payouts API (live rail from 2026-10-30;
+Cashfree stays as a fallback, see cashfree_payout_service.py).
 
 Flow (per withdrawal):
-  1. get_or_create_contact()      → razorpay_contact_id  (cached on TeacherBankDetails)
+  1. get_or_create_contact()      → razorpay_contact_id      (cached on TeacherBankDetails)
   2. get_or_create_fund_account() → razorpay_fund_account_id (cached; nulled on bank change)
-  3. create_payout()              → razorpay_payout_id    (stored on WithdrawalRequest)
+  3. create_payout()              → PayoutResult, payout id stored on WithdrawalRequest
+  Webhook (payout.processed / failed / reversed / rejected) finalises status.
+  get_payout() / find_payout_by_reference() → admin "sync" when a webhook is missed.
 
-Webhook (payout.processed / payout.failed / payout.reversed) uses reference_id
-= "withdrawal_{withdrawal_request_id}" to find the right WithdrawalRequest row.
+Idempotency:
+  reference_id and the X-Payout-Idempotency header are both "withdrawal_{id}".
+  Razorpay returns the original payout for a repeated idempotency key, so a
+  create call that timed out can be retried safely and a withdrawal can never be
+  paid twice.
+
+Auth:
+  HTTP Basic with RAZORPAYX_KEY_ID / RAZORPAYX_KEY_SECRET, falling back to the
+  PG keys (same Razorpay account). rzp_test_ keys hit RazorpayX test mode.
 
 IMPORTANT:
-- Razorpay X requires a linked Current Account with sufficient balance.
-- Auth: HTTP Basic (Key ID : Key Secret) — same credentials as collection API.
-- All amounts are in **paise** (multiply ₹ × 100).
-- Never retry create_payout() on the same withdrawal — razorpay_payout_id is
-  unique-constrained in the DB. Idempotency via reference_id only if Razorpay
-  supports it (not guaranteed for payouts).
+- Amounts are in **paise** (₹ × 100), minimum ₹1.00.
+- Payout statuses: queued → pending (approval workflow) → processing →
+  processed | reversed; rejected / cancelled / failed are terminal failures.
+- Contacts and fund accounts belong to one Razorpay account. After switching
+  accounts the cached IDs must be cleared (see features/migration_plan_payments.md).
 """
-import json
-import logging
 import base64
+import hashlib
+import hmac
+import logging
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
@@ -34,47 +45,128 @@ logger = logging.getLogger(__name__)
 
 _RAZORPAY_BASE = "https://api.razorpay.com/v1"
 
+SUCCESS_STATUSES = {"processed"}
+FAILED_STATUSES = {"failed", "reversed", "rejected", "cancelled"}
 
-def _auth_header() -> dict:
-    """HTTP Basic auth header for Razorpay API."""
-    token = base64.b64encode(
-        f"{settings.RAZORPAY_KEY_ID}:{settings.RAZORPAY_KEY_SECRET}".encode()
-    ).decode()
-    return {
+
+@dataclass
+class PayoutResult:
+    payout_id: str
+    reference_id: str
+    status: str                 # queued | pending | processing | processed | reversed | rejected | cancelled | failed
+    utr: Optional[str]
+    status_reason: Optional[str]
+    status_description: Optional[str]
+
+    @property
+    def is_success(self) -> bool:
+        return self.status in SUCCESS_STATUSES
+
+    @property
+    def is_failed(self) -> bool:
+        return self.status in FAILED_STATUSES
+
+    @property
+    def failure_reason(self) -> str:
+        return self.status_description or self.status_reason or self.status
+
+
+def reference_for(withdrawal_request_id: int) -> str:
+    return f"withdrawal_{withdrawal_request_id}"
+
+
+def _key_pair() -> tuple[str, str]:
+    if settings.RAZORPAYX_KEY_ID and settings.RAZORPAYX_KEY_SECRET:
+        return settings.RAZORPAYX_KEY_ID, settings.RAZORPAYX_KEY_SECRET
+    return settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET
+
+
+def is_configured() -> bool:
+    key_id, key_secret = _key_pair()
+    return bool(key_id and key_secret and settings.RAZORPAY_ACCOUNT_NUMBER)
+
+
+def environment() -> str:
+    """'test' for rzp_test_ keys, otherwise 'prod'."""
+    return "test" if _key_pair()[0].startswith("rzp_test_") else "prod"
+
+
+def _require_configured() -> None:
+    if not is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RazorpayX payouts are not configured. Set the RazorpayX keys and account number.",
+        )
+
+
+def _headers(idempotency_key: Optional[str] = None) -> dict:
+    key_id, key_secret = _key_pair()
+    token = base64.b64encode(f"{key_id}:{key_secret}".encode()).decode()
+    headers = {
         "Authorization": f"Basic {token}",
         "Content-Type": "application/json",
     }
+    if idempotency_key:
+        headers["X-Payout-Idempotency"] = idempotency_key
+    return headers
 
 
-def _post(path: str, payload: dict) -> dict:
+def _error_description(response: httpx.Response) -> str:
+    try:
+        return response.json().get("error", {}).get("description") or response.text
+    except Exception:
+        return response.text
+
+
+def _request(
+    method: str,
+    path: str,
+    payload: Optional[dict] = None,
+    params: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
+) -> dict:
     """
-    Synchronous POST to Razorpay API.
-    Raises HTTPException(502) on network error or non-2xx response.
+    Call the Razorpay API. Raises HTTPException(502) on network error or
+    non-2xx. httpx.TimeoutException is re-raised as-is so create_payout can
+    resolve an unknown outcome.
     """
     url = f"{_RAZORPAY_BASE}{path}"
     try:
-        response = httpx.post(url, json=payload, headers=_auth_header(), timeout=30)
+        response = httpx.request(
+            method, url, json=payload, params=params,
+            headers=_headers(idempotency_key), timeout=30,
+        )
+    except httpx.TimeoutException:
+        raise
     except httpx.RequestError as exc:
-        logger.error(f"Razorpay network error [{path}]: {exc}")
+        logger.error(f"Razorpay network error [{method} {path}]: {exc}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not reach Razorpay. Please try again.",
         )
 
     if response.status_code not in (200, 201):
-        error_body = response.text
-        logger.error(f"Razorpay error [{path}] {response.status_code}: {error_body}")
-        try:
-            err = response.json()
-            detail = err.get("error", {}).get("description", error_body)
-        except Exception:
-            detail = error_body
+        detail = _error_description(response)
+        logger.error(f"Razorpay error [{method} {path}] {response.status_code}: {response.text}")
+        # Only admins reach the payout endpoints, so Razorpay's reason is shown as-is.
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Couldn't complete this payout. Check the bank details and try again.",
+            detail=f"Razorpay declined the request: {detail}",
         )
 
     return response.json()
+
+
+def parse_payout(data: dict) -> PayoutResult:
+    details = data.get("status_details") or {}
+    return PayoutResult(
+        payout_id=data.get("id", ""),
+        reference_id=data.get("reference_id") or "",
+        status=(data.get("status") or "").lower(),
+        utr=data.get("utr"),
+        status_reason=details.get("reason") or data.get("failure_reason"),
+        status_description=details.get("description"),
+    )
 
 
 # ── Step 1: Contact ───────────────────────────────────────────────────────────
@@ -87,27 +179,26 @@ def get_or_create_contact(
     existing_contact_id: Optional[str],
 ) -> str:
     """
-    Return cached contact_id if available.
-    Otherwise create a new Razorpay Contact and return its id.
-
-    The caller is responsible for persisting the returned id to
-    TeacherBankDetails.razorpay_contact_id.
+    Return cached contact_id if available, otherwise create a Razorpay Contact.
+    The caller persists the id to TeacherBankDetails.razorpay_contact_id.
     """
     if existing_contact_id:
-        logger.info(f"Using cached Razorpay contact {existing_contact_id} for teacher {teacher_id}")
         return existing_contact_id
 
+    _require_configured()
     payload = {
-        "name": name or f"Teacher {teacher_id}",
-        "type": "employee",
+        "name": (name or f"Teacher {teacher_id}")[:50],
+        "type": "vendor",
         "reference_id": f"teacher_{teacher_id}",
     }
     if phone:
-        payload["contact"] = phone.lstrip("+").lstrip("0")[-10:]  # last 10 digits
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if len(digits) >= 10:
+            payload["contact"] = digits[-10:]
     if email:
         payload["email"] = email
 
-    data = _post("/contacts", payload)
+    data = _request("POST", "/contacts", payload)
     contact_id = data["id"]
     logger.info(f"Created Razorpay contact {contact_id} for teacher {teacher_id}")
     return contact_id
@@ -124,34 +215,27 @@ def get_or_create_fund_account(
     existing_fund_account_id: Optional[str],
 ) -> str:
     """
-    Return cached fund_account_id if available.
-    Otherwise create a new Fund Account linked to the contact.
-
-    The caller must null out TeacherBankDetails.razorpay_fund_account_id
-    whenever the teacher changes their bank account, forcing re-creation here.
+    Return cached fund_account_id if available, otherwise create a bank Fund
+    Account on the contact. Teacher bank changes null the cached id
+    (routers/teacher/withdrawals.py), forcing re-creation here.
     """
     if existing_fund_account_id:
-        logger.info(
-            f"Using cached Razorpay fund account {existing_fund_account_id} "
-            f"for teacher {teacher_id}"
-        )
         return existing_fund_account_id
 
+    _require_configured()
     payload = {
         "contact_id": contact_id,
         "account_type": "bank_account",
         "bank_account": {
             "name": account_holder_name,
-            "ifsc": ifsc_code.upper(),
-            "account_number": account_number,
+            "ifsc": ifsc_code.strip().upper(),
+            "account_number": account_number.strip(),
         },
     }
 
-    data = _post("/fund_accounts", payload)
+    data = _request("POST", "/fund_accounts", payload)
     fund_account_id = data["id"]
-    logger.info(
-        f"Created Razorpay fund account {fund_account_id} for teacher {teacher_id}"
-    )
+    logger.info(f"Created Razorpay fund account {fund_account_id} for teacher {teacher_id}")
     return fund_account_id
 
 
@@ -162,53 +246,100 @@ def create_payout(
     fund_account_id: str,
     amount_inr: Decimal,
     narration: str = "MyMentor teacher payout",
-) -> str:
+) -> PayoutResult:
     """
-    Create the actual money transfer via Razorpay Payouts.
+    Create the money transfer. Inspect the returned status: Razorpay can answer
+    with a terminal state straight away (e.g. processed in test mode).
 
-    reference_id = "withdrawal_{id}" — used by the webhook handler to
-    identify which WithdrawalRequest to update.
-
-    Returns the Razorpay payout ID (e.g. "pout_XXXXXXXXXXXXX").
-    Raises HTTPException on any Razorpay error.
-
-    IMPORTANT: Call this ONCE per WithdrawalRequest. Never retry — the payout
-    may have already been queued by Razorpay even if our response was lost.
-    Use the webhook (payout.processed / payout.failed) as the final truth.
+    A timeout leaves the outcome unknown, so we look the payout up by
+    reference_id. If it is still not visible we raise 502 and the withdrawal
+    stays pending; retrying is safe because of the idempotency key.
     """
-    account_number = getattr(settings, "RAZORPAY_ACCOUNT_NUMBER", "")
-    if not account_number:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Razorpay X account not configured. Contact platform admin.",
-        )
+    _require_configured()
 
-    amount_paise = int(amount_inr * 100)
-    if amount_paise <= 0:
+    amount_paise = int((amount_inr * 100).to_integral_value())
+    if amount_paise < 100:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Payout amount must be positive.",
+            detail="Payout amount must be at least ₹1.00.",
         )
 
-    # IMPS for amounts ≤ ₹2,00,000 (instant); NEFT otherwise
-    mode = "IMPS" if amount_paise <= 20_000_000 else "NEFT"
+    # IMPS is instant up to ₹5,00,000; NEFT above that.
+    mode = "IMPS" if amount_paise <= 50_000_000 else "NEFT"
+    reference_id = reference_for(withdrawal_request_id)
 
     payload = {
-        "account_number": account_number,
+        "account_number": settings.RAZORPAY_ACCOUNT_NUMBER,
         "fund_account_id": fund_account_id,
         "amount": amount_paise,
         "currency": "INR",
         "mode": mode,
         "purpose": "payout",
-        "queue_if_low_balance": True,   # Queue instead of failing if low balance
-        "reference_id": f"withdrawal_{withdrawal_request_id}",
-        "narration": narration,
+        "queue_if_low_balance": True,   # wait for a top-up instead of failing
+        "reference_id": reference_id,
+        "narration": narration[:30],     # Razorpay limit: 30 chars, alphanumeric + spaces
+        "notes": {"withdrawal_id": str(withdrawal_request_id)},
     }
 
-    data = _post("/payouts", payload)
-    payout_id = data["id"]
+    try:
+        data = _request("POST", "/payouts", payload, idempotency_key=reference_id)
+    except httpx.TimeoutException:
+        logger.error(f"Razorpay payout create timed out for withdrawal {withdrawal_request_id}")
+        existing = find_payout_by_reference(withdrawal_request_id)
+        if existing:
+            return existing
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Razorpay did not answer in time. Try Pay again; it will not pay twice.",
+        )
+
+    result = parse_payout(data)
     logger.info(
-        f"Razorpay payout {payout_id} created for withdrawal {withdrawal_request_id} "
-        f"| amount=₹{amount_inr} | mode={mode}"
+        f"Razorpay payout {result.payout_id} for withdrawal {withdrawal_request_id} "
+        f"| ₹{amount_inr} | {mode} | {result.status}"
     )
-    return payout_id
+    return result
+
+
+# ── Reconciliation ────────────────────────────────────────────────────────────
+
+def get_payout(payout_id: str) -> Optional[PayoutResult]:
+    """Fetch a payout by its pout_ id. None if Razorpay has no such payout."""
+    _require_configured()
+    try:
+        return parse_payout(_request("GET", f"/payouts/{payout_id}"))
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=502, detail="Razorpay did not answer in time.")
+    except HTTPException as exc:
+        if "does not exist" in str(exc.detail).lower():
+            return None
+        raise
+
+
+def find_payout_by_reference(withdrawal_request_id: int) -> Optional[PayoutResult]:
+    """Look up the payout for a withdrawal by reference_id (newest first)."""
+    _require_configured()
+    try:
+        data = _request(
+            "GET", "/payouts",
+            params={
+                "account_number": settings.RAZORPAY_ACCOUNT_NUMBER,
+                "reference_id": reference_for(withdrawal_request_id),
+                "count": 1,
+            },
+        )
+    except httpx.TimeoutException:
+        return None
+    items = data.get("items") or []
+    return parse_payout(items[0]) if items else None
+
+
+# ── Webhook ───────────────────────────────────────────────────────────────────
+
+def verify_webhook_signature(raw_body: bytes, signature: str) -> bool:
+    """X-Razorpay-Signature = hex(HMAC_SHA256(raw body, RAZORPAYX_WEBHOOK_SECRET))."""
+    secret = settings.RAZORPAYX_WEBHOOK_SECRET
+    if not secret or not signature:
+        return False
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)

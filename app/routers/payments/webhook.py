@@ -1,7 +1,8 @@
 """
 Payment Webhook Handlers
-POST /api/payments/webhook/razorpay   — student payments (+ legacy Razorpay X payouts)
-POST /api/payments/webhook/cashfree   — Cashfree Payouts V2 (teacher withdrawals)
+POST /api/payments/webhook/razorpay   — student payments (Razorpay PG)
+POST /api/payments/webhook/razorpayx  — RazorpayX payouts (teacher withdrawals)
+POST /api/payments/webhook/cashfree   — Cashfree Payouts V2 (fallback payout rail)
 
 No JWT auth — HMAC signature verification only.
 Source of truth for payment AND payout status.
@@ -10,9 +11,9 @@ Always returns 200 to Razorpay (non-200 causes infinite retries).
 Handles:
   payment.captured  → activate student subscription
   payment.failed    → fail student subscription
-  payout.processed  → mark WithdrawalRequest completed + mark earnings paid + FCM teacher
-  payout.failed     → mark WithdrawalRequest failed + FCM teacher
-  payout.reversed   → mark WithdrawalRequest failed + FCM teacher
+  payout.processed                    → WithdrawalRequest completed + FCM teacher
+  payout.failed / reversed / rejected → WithdrawalRequest failed (money back to balance) + FCM teacher
+  (payout.* is also accepted on /razorpay in case it is subscribed on the PG webhook)
 """
 import json
 import logging
@@ -26,6 +27,7 @@ from app.models.subscription import StudentSubscription
 from app.models.payment import RazorpayPayment
 from app.models.withdrawal import WithdrawalRequest
 from app.services import cashfree_payout_service as cashfree_payouts
+from app.services import razorpay_payout_service as razorpayx
 from app.services.razorpay_service import verify_webhook_signature
 from app.services.subscription_service import activate_subscription, fail_subscription
 from app.services.withdrawal_settlement import (
@@ -121,18 +123,12 @@ async def razorpay_webhook(
         except Exception as e:
             logger.error(f"ERROR processing payment.failed webhook: {e}")
 
-    # 5. Handle payout.processed → Withdrawal completed, earnings marked paid
-    elif event == "payout.processed":
+    # 5. Payout events, if they were subscribed on this webhook too
+    elif event in _RAZORPAYX_EVENTS:
         try:
-            _handle_payout_processed(payload, db)
+            _handle_payout_event(payload, event, db)
         except Exception as e:
-            logger.error(f"ERROR processing payout.processed webhook: {e}")
-
-    # 6. Handle payout.failed / payout.reversed → Withdrawal failed
-    elif event in ("payout.failed", "payout.reversed"):
-        try:
-            _handle_payout_failed(payload, event, db)
-        except Exception as e:
+            db.rollback()
             logger.error(f"ERROR processing {event} webhook: {e}")
 
     # Always return 200
@@ -150,29 +146,66 @@ def _find_withdrawal(reference_id: str, event: str, db: Session) -> Optional[Wit
     return w
 
 
-def _handle_payout_processed(payload: dict, db: Session) -> None:
-    """Razorpay confirmed the payout reached the teacher's bank."""
-    payout_entity = payload["payload"]["payout"]["entity"]
-    w = _find_withdrawal(payout_entity.get("reference_id", ""), "payout.processed", db)
-    if w:
-        mark_withdrawal_completed(w, payout_entity.get("id", ""), db)
+# ── RazorpayX payouts (teacher withdrawals) ───────────────────────────────────
+
+_RAZORPAYX_EVENTS = {
+    "payout.processed", "payout.failed", "payout.reversed", "payout.rejected",
+}
 
 
-def _handle_payout_failed(payload: dict, event: str, db: Session) -> None:
+def _handle_payout_event(payload: dict, event: str, db: Session) -> None:
     """
-    Razorpay payout failed or was reversed.
-    Mark withdrawal as 'failed' so teacher can re-request.
-    Earnings remain 'pending' — they are NOT marked paid.
+    Settle a withdrawal from a RazorpayX payout event. The payout entity's
+    status decides the outcome, so a late or out-of-order event cannot undo a
+    newer state (mark_* are idempotent; reversed after processed is a reversal).
     """
-    payout_entity = payload["payload"]["payout"]["entity"]
-    failure_detail = (
-        payout_entity.get("status_details", {}).get("description", "")
-        or payout_entity.get("status_details", {}).get("reason", "")
-        or event
-    )
-    w = _find_withdrawal(payout_entity.get("reference_id", ""), event, db)
-    if w:
-        mark_withdrawal_failed(w, failure_detail, db)
+    entity = payload["payload"]["payout"]["entity"]
+    result = razorpayx.parse_payout(entity)
+    w = _find_withdrawal(result.reference_id, event, db)
+    if not w:
+        return
+    if result.is_success:
+        mark_withdrawal_completed(w, result.utr or result.payout_id, db)
+    elif result.is_failed:
+        mark_withdrawal_failed(w, result.failure_reason, db)
+
+
+@router.post("/razorpayx")
+async def razorpayx_payout_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    RazorpayX payout webhook (RazorpayX → Settings → Developer Controls → Webhooks).
+    Signature: X-Razorpay-Signature = hex(HMAC_SHA256(raw body, RAZORPAYX_WEBHOOK_SECRET)).
+    Always returns 200; handlers are idempotent so Razorpay retries are harmless.
+    """
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+
+    if not razorpayx.verify_webhook_signature(body, signature):
+        logger.warning("Invalid RazorpayX payout webhook signature received.")
+        return {"status": "ignored"}
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        logger.error("Could not parse RazorpayX webhook body as JSON.")
+        return {"status": "error"}
+
+    event = payload.get("event", "")
+    logger.info(f"RazorpayX payout webhook received: {event}")
+
+    if event not in _RAZORPAYX_EVENTS:
+        return {"status": "ok"}   # payout.queued / initiated / pending etc.
+
+    try:
+        _handle_payout_event(payload, event, db)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"ERROR processing RazorpayX {event} webhook: {e}")
+
+    return {"status": "ok"}
 
 
 # ── Cashfree Payouts (teacher withdrawals) ────────────────────────────────────
