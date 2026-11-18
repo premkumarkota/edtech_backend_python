@@ -391,6 +391,7 @@ def get_result(attempt_id: int, student: User = Depends(require_student), db: Se
         ans = next((a for a in attempt.answers if a.question_id == q.id), None)
         breakdown.append({
             "question": q.question_text,
+            "image_url": q.image_url,
             "options": {"A": q.option_a, "B": q.option_b, "C": q.option_c, "D": q.option_d},
             "correct": q.correct_option,
             "selected": ans.selected_option if ans else None,

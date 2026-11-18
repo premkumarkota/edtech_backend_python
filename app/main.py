@@ -191,6 +191,20 @@ def _ensure_quiz_retake_columns():
         print(f"WARNING: quiz retake patch failed: {e}")
 
 
+def _ensure_quiz_question_image_column():
+    """quiz_questions.image_url (question diagrams). Mirrors alembic p0q1r2s3t4u5."""
+    if engine.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text as _sql
+    try:
+        with engine.begin() as conn:
+            conn.execute(_sql(
+                "ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS image_url VARCHAR(1000)"
+            ))
+    except Exception as e:  # never block startup on this
+        print(f"WARNING: quiz question image patch failed: {e}")
+
+
 _DEFAULT_EXAM_CATEGORIES = ("Entrance Exams", "Competitive Exams", "Academic Exams")
 
 
@@ -235,6 +249,7 @@ async def lifespan(app: FastAPI):
         _ensure_exam_categories()
         _ensure_student_consent_columns()
         _ensure_quiz_retake_columns()
+        _ensure_quiz_question_image_column()
         _ensure_streak_columns()
         _ensure_teacher_terms_columns()
     except Exception as e:

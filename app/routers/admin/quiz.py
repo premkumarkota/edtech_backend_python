@@ -8,6 +8,8 @@ GET    /api/admin/quiz/{id}               Get quiz with questions
 PATCH  /api/admin/quiz/{id}/publish       Publish quiz
 PATCH  /api/admin/quiz/{id}/unpublish     Unpublish quiz
 DELETE /api/admin/quiz/{id}               Delete quiz
+POST   /api/admin/quiz/questions/{id}/image   Upload a question's diagram
+DELETE /api/admin/quiz/questions/{id}/image   Remove a question's diagram
 """
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -27,7 +29,10 @@ from app.services.ai_quiz_service import generate_quiz, refine_questions, AIQuiz
 from app.public_errors import http_from_ai_error, public_validation_error
 
 from app.services.quiz_marks import recalc_marks
+from app.services.storage_service import upload_file, ALLOWED_IMAGE_TYPES
 router = APIRouter()
+
+MAX_QUESTION_IMAGE_MB = 5
 
 
 @router.post("/ai-generate", response_model=QuizResponse)
@@ -354,6 +359,43 @@ def update_question(
         recalc_marks(quiz, sum(qq.marks for qq in quiz.questions))
         db.commit()
     return {"status": "success", "question_id": question_id}
+
+
+@router.post("/questions/{question_id}/image")
+async def upload_question_image(
+    question_id: int,
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Attach (or replace) the diagram shown with a question. JPG/PNG/WEBP, 5 MB."""
+    q = db.query(QuizQuestion).filter(QuizQuestion.id == question_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    url = await upload_file(
+        file,
+        folder=f"quiz_questions/{q.quiz_id}",
+        allowed_types=ALLOWED_IMAGE_TYPES,
+        max_size_mb=MAX_QUESTION_IMAGE_MB,
+    )
+    q.image_url = url
+    db.commit()
+    return {"status": "success", "question_id": question_id, "image_url": url}
+
+
+@router.delete("/questions/{question_id}/image")
+def remove_question_image(
+    question_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Remove a question's diagram."""
+    q = db.query(QuizQuestion).filter(QuizQuestion.id == question_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    q.image_url = None
+    db.commit()
+    return {"status": "success", "question_id": question_id, "image_url": None}
 
 
 @router.delete("/questions/{question_id}")

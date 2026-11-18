@@ -83,6 +83,8 @@ class QuizQuestion(Base):
     explanation    = Column(Text, nullable=True)
     marks          = Column(Integer, default=1)
     order_index    = Column(Integer, default=0)
+    # Optional diagram/figure shown with the question (admin uploads it on edit).
+    image_url      = Column(String(1000), nullable=True)
     # Set only on AI-generated retake questions: the attempt they were made for.
     attempt_id     = Column(Integer, ForeignKey("quiz_attempts.id", ondelete="CASCADE"),
                             nullable=True, index=True)

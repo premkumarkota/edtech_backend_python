@@ -108,6 +108,7 @@ class QuizQuestionResponse(BaseModel):
     option_b: str
     option_c: Optional[str] = None
     option_d: Optional[str] = None
+    image_url: Optional[str] = None
     marks: int
     order_index: int
     # Note: correct_option NOT exposed to students (only for admin/result)

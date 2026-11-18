@@ -108,7 +108,12 @@ def prepare_retake_questions(quiz: Quiz, attempt: QuizAttempt, db: Session) -> b
     if quiz.quiz_type == "chapter" and quiz.chapter:
         content = (quiz.chapter.live_description or "").strip()[:_MAX_CONTENT_CHARS]
 
-    batches = [base[i:i + _BATCH_SIZE] for i in range(0, len(base), _BATCH_SIZE)]
+    # Questions with a diagram stay as they are — a rewritten question wouldn't
+    # match the image.
+    regen = [q for q in base if not q.image_url]
+    if not regen:
+        return False
+    batches = [regen[i:i + _BATCH_SIZE] for i in range(0, len(regen), _BATCH_SIZE)]
 
     def run(i: int) -> list[dict]:
         note = (f"(This is part {i + 1} of {len(batches)}; only cover the reference "
@@ -128,7 +133,7 @@ def prepare_retake_questions(quiz: Quiz, attempt: QuizAttempt, db: Session) -> b
     with ThreadPoolExecutor(max_workers=min(len(batches), 4)) as pool:
         results = list(pool.map(run, range(len(batches))))
 
-    served_ids: list[int] = []
+    replacement: dict[int, int] = {}   # original question id → fresh row id
     fresh_count = 0
     for batch, generated in zip(batches, results):
         # `seen_stems` is shared, so duplicates of earlier questions (and across
@@ -150,11 +155,12 @@ def prepare_retake_questions(quiz: Quiz, attempt: QuizAttempt, db: Session) -> b
             )
             db.add(row)
             db.flush()
-            served_ids.append(row.id)
+            replacement[original.id] = row.id
         fresh_count += len(fresh)
-        # Short batch → keep the originals it couldn't replace, so the
-        # question count and total marks stay the same.
-        served_ids.extend(q.id for q in batch[len(fresh):])
+
+    # Same order and count as the quiz: originals stay where no fresh question
+    # replaced them (short batches, image questions).
+    served_ids = [replacement.get(q.id, q.id) for q in base]
 
     if fresh_count == 0:
         logger.warning("Retake for quiz %s fell back to the original questions", quiz.id)
